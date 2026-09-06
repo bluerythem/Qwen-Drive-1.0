@@ -253,3 +253,40 @@ The geometric test that replaced it needed one fix of its own: shapely's `crosse
 an interior-interior intersection, but dividers are short two-point segments that a path
 frequently meets at an endpoint, so the test uses `intersects`. That was caught by probing a
 divider with a synthetic path built to cross it and getting `False` back.
+
+
+## Lane changes in the full val split
+
+Detection needs no images: ego poses and the map are enough, and both come from
+`v1.0-trainval_meta.tgz` (454 MB) plus the map expansion already downloaded. That matters
+because the camera blobs are ~350 GB in total, cannot be fetched per file (individual image
+URLs 404), and are **not** split-aligned - the 150 val scenes are spread across all ten, so
+"val only" does not shrink the download. Scanning metadata first says which scenes would be
+worth it.
+
+    curl -L https://motional-nuscenes.s3.amazonaws.com/public/v1.0/v1.0-trainval_meta.tgz \
+      | tar xz -C data/nuscenes-trainval          # 454 MB down, 2.5 GB on disk
+    python tools/nuscenes_scan_lane_changes.py --root data/nuscenes-trainval \
+      --version v1.0-trainval --split val --maps-from data/nuscenes \
+      --output data/lane_changes_val.json
+
+Result: **42 lane-change keyframes in 10 of the 150 val scenes**, from 4201 usable keyframes.
+Merging consecutive keyframes (one manoeuvre is seen from several starting points) gives
+**15 distinct lane changes**.
+
+| scene | keyframes | scene | keyframes |
+| --- | --- | --- | --- |
+| scene-0273 | 7 | scene-0557 | 4 |
+| scene-0914 | 6 | scene-0931 | 4 |
+| scene-0962 | 6 | scene-0268 | 2 |
+| scene-0638 | 5 | scene-0563 | 2 |
+| scene-0783 | 5 | scene-0093 | 1 |
+
+The detections look right: lateral shift averages 2.83 m - about one lane width - at a mean
+heading change of 0.129 rad (7.4 deg), which is the signature of a lane change rather than a
+turn. 26 are to the right, 16 to the left. scene-0783 keyframes 25-29 are the cleanest
+example: -2.3 m of lateral movement with under 0.08 rad of heading change.
+
+Building runnable scenes from these needs the image blobs, which is the 350 GB download.
+`data/lane_changes_val.json` records every hit with its `sample_token`, so the scene builder
+can be pointed straight at them once images are present.

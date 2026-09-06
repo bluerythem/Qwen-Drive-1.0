@@ -1,0 +1,380 @@
+[
+ {
+  "scene": "scene-0093",
+  "location": "boston-seaport",
+  "sample_token": "5c27958677604dc5ad254f69f31aaf85",
+  "keyframe": 9,
+  "lateral_shift_m": -9.32,
+  "heading_change_rad": 0.322,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0268",
+  "location": "singapore-onenorth",
+  "sample_token": "01a7d01c014f406f87b8fe11976c3d0a",
+  "keyframe": 4,
+  "lateral_shift_m": 5.3,
+  "heading_change_rad": 0.149,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0268",
+  "location": "singapore-onenorth",
+  "sample_token": "a2fada921a7d4141877f4a51328a21af",
+  "keyframe": 5,
+  "lateral_shift_m": 3.09,
+  "heading_change_rad": 0.087,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0273",
+  "location": "singapore-onenorth",
+  "sample_token": "915e9d78c1eb4bc7a75fbd9d672be158",
+  "keyframe": 3,
+  "lateral_shift_m": -1.82,
+  "heading_change_rad": 0.109,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0273",
+  "location": "singapore-onenorth",
+  "sample_token": "8ae5eb1e96954ba0b154600564400ab4",
+  "keyframe": 4,
+  "lateral_shift_m": -1.56,
+  "heading_change_rad": 0.044,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0273",
+  "location": "singapore-onenorth",
+  "sample_token": "b513d361d0874bf8aa8eeae2e04dd25c",
+  "keyframe": 11,
+  "lateral_shift_m": 1.59,
+  "heading_change_rad": 0.055,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0273",
+  "location": "singapore-onenorth",
+  "sample_token": "e1e84a1a464844cd80f144faa700c067",
+  "keyframe": 15,
+  "lateral_shift_m": -2.24,
+  "heading_change_rad": 0.205,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0273",
+  "location": "singapore-onenorth",
+  "sample_token": "44a22e08d57b40d4bf7077a060741383",
+  "keyframe": 16,
+  "lateral_shift_m": -3.71,
+  "heading_change_rad": 0.25,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0273",
+  "location": "singapore-onenorth",
+  "sample_token": "a1d17e01d0454964a0699b251b2f1e70",
+  "keyframe": 28,
+  "lateral_shift_m": -5.28,
+  "heading_change_rad": 0.271,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0273",
+  "location": "singapore-onenorth",
+  "sample_token": "8d5c8d68750649c5bb0798abe4a1d8f8",
+  "keyframe": 29,
+  "lateral_shift_m": -5.39,
+  "heading_change_rad": 0.261,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0557",
+  "location": "boston-seaport",
+  "sample_token": "e0b31c1fd62746a2b314f9584548ecb0",
+  "keyframe": 6,
+  "lateral_shift_m": -2.14,
+  "heading_change_rad": 0.145,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0557",
+  "location": "boston-seaport",
+  "sample_token": "1f6ff3753fc94b9f9c44a5be9a6ec17f",
+  "keyframe": 7,
+  "lateral_shift_m": -2.12,
+  "heading_change_rad": 0.108,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0557",
+  "location": "boston-seaport",
+  "sample_token": "af67f465f5994ac7bab19825336db644",
+  "keyframe": 8,
+  "lateral_shift_m": -1.98,
+  "heading_change_rad": 0.064,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0557",
+  "location": "boston-seaport",
+  "sample_token": "a9172ca19f2b473c92a90cc702d199ba",
+  "keyframe": 9,
+  "lateral_shift_m": -1.54,
+  "heading_change_rad": 0.011,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0563",
+  "location": "boston-seaport",
+  "sample_token": "c686a80773ef45c3a850112e98f21df6",
+  "keyframe": 6,
+  "lateral_shift_m": -1.69,
+  "heading_change_rad": 0.18,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0563",
+  "location": "boston-seaport",
+  "sample_token": "5bbb8e5b260a4a13870b0239bbd764b4",
+  "keyframe": 7,
+  "lateral_shift_m": -1.68,
+  "heading_change_rad": 0.158,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0638",
+  "location": "boston-seaport",
+  "sample_token": "9690a81505bd48308b74c1ea94c7ac40",
+  "keyframe": 16,
+  "lateral_shift_m": 5.55,
+  "heading_change_rad": 0.287,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0638",
+  "location": "boston-seaport",
+  "sample_token": "954a8657284e48488048a7ca32e4d9e3",
+  "keyframe": 17,
+  "lateral_shift_m": 2.57,
+  "heading_change_rad": 0.179,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0638",
+  "location": "boston-seaport",
+  "sample_token": "7604362a89f94113ad7a2bb19a074520",
+  "keyframe": 18,
+  "lateral_shift_m": 1.72,
+  "heading_change_rad": 0.14,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0638",
+  "location": "boston-seaport",
+  "sample_token": "7e4fbe4ac2a349278488721d8e96e29f",
+  "keyframe": 19,
+  "lateral_shift_m": 1.61,
+  "heading_change_rad": 0.118,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0638",
+  "location": "boston-seaport",
+  "sample_token": "0b1c4f8426554e81b723df9e4acf1983",
+  "keyframe": 20,
+  "lateral_shift_m": 1.79,
+  "heading_change_rad": 0.122,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0783",
+  "location": "boston-seaport",
+  "sample_token": "d0481d9cb254406892ce71a8e951f898",
+  "keyframe": 25,
+  "lateral_shift_m": -2.3,
+  "heading_change_rad": 0.081,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0783",
+  "location": "boston-seaport",
+  "sample_token": "4f8243ae6cbe4793aac0e0c96a1ae46a",
+  "keyframe": 26,
+  "lateral_shift_m": -2.34,
+  "heading_change_rad": 0.035,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0783",
+  "location": "boston-seaport",
+  "sample_token": "e67f3e81225f426f8e1743af45487762",
+  "keyframe": 27,
+  "lateral_shift_m": -2.46,
+  "heading_change_rad": 0.013,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0783",
+  "location": "boston-seaport",
+  "sample_token": "5c3ac3d68f3a4abcb0a7d00eabf4acc5",
+  "keyframe": 28,
+  "lateral_shift_m": -2.26,
+  "heading_change_rad": 0.005,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0783",
+  "location": "boston-seaport",
+  "sample_token": "b5b0d31c411b4d5d9b4f6a19f1ee5056",
+  "keyframe": 29,
+  "lateral_shift_m": -1.51,
+  "heading_change_rad": 0.023,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0914",
+  "location": "boston-seaport",
+  "sample_token": "a63890479948474789881a575788d25c",
+  "keyframe": 25,
+  "lateral_shift_m": -2.24,
+  "heading_change_rad": 0.321,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0914",
+  "location": "boston-seaport",
+  "sample_token": "fb1f8ae5a6b5424795b51aae5075599b",
+  "keyframe": 26,
+  "lateral_shift_m": -2.73,
+  "heading_change_rad": 0.243,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0914",
+  "location": "boston-seaport",
+  "sample_token": "4cc584c2913742e690f757531deaca80",
+  "keyframe": 27,
+  "lateral_shift_m": -3.14,
+  "heading_change_rad": 0.159,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0914",
+  "location": "boston-seaport",
+  "sample_token": "5b4dc4663841468cb454f35a7bbf75a5",
+  "keyframe": 28,
+  "lateral_shift_m": -3.22,
+  "heading_change_rad": 0.063,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0914",
+  "location": "boston-seaport",
+  "sample_token": "67fa7b67228546379e22d0481e3d0331",
+  "keyframe": 29,
+  "lateral_shift_m": -3.0,
+  "heading_change_rad": 0.024,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0914",
+  "location": "boston-seaport",
+  "sample_token": "8a39538c4885485b8dc49d2c6471626a",
+  "keyframe": 30,
+  "lateral_shift_m": -2.15,
+  "heading_change_rad": 0.108,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0931",
+  "location": "singapore-queenstown",
+  "sample_token": "8e2f2524e68341c0a48af23b113c1a1e",
+  "keyframe": 14,
+  "lateral_shift_m": -2.37,
+  "heading_change_rad": 0.221,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0931",
+  "location": "singapore-queenstown",
+  "sample_token": "20f91bd424014298b38029276e0bfb10",
+  "keyframe": 15,
+  "lateral_shift_m": -1.82,
+  "heading_change_rad": 0.148,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0931",
+  "location": "singapore-queenstown",
+  "sample_token": "e9c58a877bde42e68c0a4850cd93c6ca",
+  "keyframe": 22,
+  "lateral_shift_m": 1.6,
+  "heading_change_rad": 0.094,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0931",
+  "location": "singapore-queenstown",
+  "sample_token": "e04cad4d02d546b9ab76226673135c53",
+  "keyframe": 23,
+  "lateral_shift_m": 1.61,
+  "heading_change_rad": 0.013,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0962",
+  "location": "singapore-onenorth",
+  "sample_token": "2ff0482416cb4997bab12b0d7700f142",
+  "keyframe": 3,
+  "lateral_shift_m": 2.27,
+  "heading_change_rad": 0.106,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0962",
+  "location": "singapore-onenorth",
+  "sample_token": "2463d4edf6bc4962bd9f2522ebe7eb08",
+  "keyframe": 4,
+  "lateral_shift_m": 2.34,
+  "heading_change_rad": 0.046,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0962",
+  "location": "singapore-onenorth",
+  "sample_token": "754e47c56a9f4d658d62a3d458f9d7b4",
+  "keyframe": 5,
+  "lateral_shift_m": 1.56,
+  "heading_change_rad": 0.018,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0962",
+  "location": "singapore-onenorth",
+  "sample_token": "8a71126a0b234b94a1c871bb8f94aa93",
+  "keyframe": 26,
+  "lateral_shift_m": 8.26,
+  "heading_change_rad": 0.271,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0962",
+  "location": "singapore-onenorth",
+  "sample_token": "c43f0225cf1749e888787b09eb3cea93",
+  "keyframe": 27,
+  "lateral_shift_m": 4.46,
+  "heading_change_rad": 0.137,
+  "divider_crossings": 1
+ },
+ {
+  "scene": "scene-0962",
+  "location": "singapore-onenorth",
+  "sample_token": "4d617cc386004b74aff4946273b672bb",
+  "keyframe": 28,
+  "lateral_shift_m": 1.54,
+  "heading_change_rad": 0.044,
+  "divider_crossings": 1
+ }
+]
