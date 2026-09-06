@@ -1,0 +1,20 @@
+# Local environment (see SETUP_NOTES.md)
+.venv/
+bin/micromamba
+cuda128/
+cuda-home/
+__pycache__/
+*.pyc
+
+# Released weights, 13 GB from Hugging Face
+Qwen-Drive-1.0-4B/
+
+# nuScenes mini and everything derived from it (CC BY-NC-SA; rebuild with tools/)
+data/nuscenes/
+data/nuscenes_perception/
+data/nuscenes_scenes.jsonl
+
+# Run artefacts
+outputs/
+demo.png
+nohup.out
