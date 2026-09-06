@@ -398,7 +398,13 @@ nuscenes 128 was the first pick for the single-change case and the resolver reje
 right side is junction connectors for 60 of the first 90 m, with a real lane only at 24-32 m.
 That is the map being right, and 132 replaced it.
 
-Every line on the figure carries a provenance tag, and a key sits in the footer:
+The left column of the figure is the pipeline itself: one box per component with an **IN**
+and an **OUT** section, and the arrows between boxes labelled with the message that travels
+on them - `LaneRoute`, `ReasonMessage`, `ResolvedTarget`. Under the figure, the markdown
+prints the same four stages as **input -> output** blocks with the actual message contents
+as JSON (arrays summarised by shape and first/last rows), so the contract can be read exactly.
+
+Provenance tags remain on the camera and map panels, and a key sits in the footer:
 
 | tag | meaning | examples |
 | --- | --- | --- |

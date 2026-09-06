@@ -691,34 +691,8 @@ def trion_run(scene_label, nav_choice, command_choice, custom_command, preferenc
     trion_figure(out_path, sample, command, nav_choice, route, msg, resolved, trajectory, summary,
                  helper.vector(token, half_length=95.0, half_width=14.0), camera_rig(), token)
 
-    ok = "".join("✓" if ok else "✗" for _, ok, _ in resolved.checks)
-    verdict = ("**rejected → fallback KEEP**" if resolved.fallback else "**accepted**")
-    if route.get("matched"):
-        rt = (f"`{route['manoeuvre']}`" + (f" at {route['at_m']:.0f} m" if route.get("at_m") else "")
-              + f" — lane {route['current_lane'] + 1} of {route['lanes']}"
-              + (f", valid lanes {[i + 1 for i in route['valid']]}, **{route['changes_needed']} change(s) "
-                 f"{route['direction'].lower()}**" if route.get("changes_needed") else ", already in a valid lane"))
-    else:
-        rt = f"`{route['manoeuvre']}` — **unmatched**: {route.get('reason', '')}"
-    lines = [
-        f"**Route matcher** → {rt}",
-        f"**Trion-Reason** → `{msg.lateral}` (source `{msg.source}`), cruise `{msg.cruise_label}`"
-        + (f", then {msg.pending}" if msg.pending else "") + (" — **asks nav to reroute**" if msg.reroute else "")
-        + (f", window {msg.window_m[0]:.0f}–{msg.window_m[1]:.0f} m" if msg.lateral != "KEEP" else "")
-        + f"  \n_{msg.why}_",
-        f"**Resolver** → {verdict} &nbsp;`{ok}`  \n"
-        + "  \n".join(f"{'✓' if ok else '✗'} {name} — {note}" for name, ok, note in resolved.checks),
-        f"**Trion-Action** → drives `{resolved.lateral}`. Real output: a 50×3 trajectory (5 s @ 10 Hz). "
-        f"Derived for display: reaches {summary['reach_m']:.0f} m, lateral {summary['lateral_move_m']:+.1f} m vs own lane, "
-        f"ends at {summary['final_speed']:.1f} m/s (cap {resolved.speed_cap:.1f} is a resolver input)"
-        + (f". Change scheduled at {summary['commit_at_m']:.0f} m — beyond this tick's 5 s horizon, so this "
-           f"trajectory is the approach; a later tick executes it" if summary["commit_at_m"] and summary["commit_at_m"] > summary["reach_m"] else "")
-        + (f". *Mock only:* commits at {summary['commit_at_m']:.0f} m — a fixed 35 % into the window, "
-           f"not something a real planner emits unless given a head for it" if summary["commit_at_m"] else ""),
-        "_Tags on the figure: **in** input · **msg** real inter-system message · **out** real system output · "
-        "**viz** derived for display · **mock** exists only here._",
-    ]
-    return str(out_path), "\n\n".join(lines)
+    return str(out_path), trion_trace(sample, nav_choice, manoeuvre, command, preference, speed,
+                                      token, route, msg, resolved, trajectory, summary)
 
 
 TAG_COLOURS = {"in": "#2f3437", "msg": "#1f5f8b", "out": "#1f5f8b", "viz": "#8a9296", "mock": "#c0392b"}
@@ -727,6 +701,129 @@ TAG_KEY = [("in", "input the system receives"),
            ("out", "real output of the system"),
            ("viz", "derived from the output for display only"),
            ("mock", "exists only in this mock")]
+
+
+
+def _json(obj) -> str:
+    import json
+
+    return "```json\n" + json.dumps(obj, indent=2, ensure_ascii=False) + "\n```"
+
+
+def trion_trace(sample, nav_choice, manoeuvre, command, preference, speed, token, route, msg,
+                res, traj, summary) -> str:
+    """The pipeline as four input -> output blocks, with the actual message contents.
+
+    Numpy arrays are summarised by shape and a few rows; everything else is printed as is,
+    so what a component received and what it returned can be read side by side.
+    """
+    import dataclasses
+
+    import numpy as np
+
+    def rows(a, n=3):
+        a = np.asarray(a)
+        head = [[round(float(v), 2) for v in r] for r in a[:n]]
+        tail = [[round(float(v), 2) for v in r] for r in a[-n:]]
+        return {"shape": list(a.shape), "first": head, "last": tail}
+
+    own_lane = next((note.split()[-1] for name, ok, note in res.checks if name == "localized in a lane" and ok), None)
+
+    route_in = {"nav_step": {"manoeuvre": manoeuvre, "text": nav_choice},
+                "localization": {"sample_token": token[:8], "lane": own_lane},
+                "hd_map": sample.scene.metadata.get("scene_token", "")[:8] + "… (nuScenes lane graph)"}
+    route_out = {k: v for k, v in route.items() if k != "per_lane"}
+    if "per_lane" in route:
+        route_out["turns_available_per_lane"] = route["per_lane"]
+
+    reason_in = {"lane_route": "LaneRoute above", "voice": command,
+                 "speed_preference": preference, "ego_speed_mps": round(speed, 2)}
+    reason_out = dataclasses.asdict(msg)
+
+    resolver_in = {"reason_message": "ReasonMessage above", "lane_route": "LaneRoute above",
+                   "hd_map": "nuScenes lane graph + dividers + drivable area",
+                   "localization": {"lane": own_lane}, "ego_speed_mps": round(speed, 2)}
+    resolver_out = {
+        "lateral": res.lateral, "requested": res.requested, "fallback": res.fallback,
+        "window_m": [round(w, 1) for w in res.window_m], "deadline_m": round(res.deadline_m, 1),
+        "speed_cap_mps": round(res.speed_cap, 2), "stop_x_m": None if res.stop_x is None else round(res.stop_x, 1),
+        "checks": [{"check": n, "ok": ok, "note": note} for n, ok, note in res.checks],
+        "current_corridor_xy": rows(res.current_xy), "target_corridor_xy": rows(res.target_xy),
+    }
+
+    action_in = {"resolved_target": "ResolvedTarget above", "ego_speed_mps": round(speed, 2),
+                 "horizon_s": 5.0, "hz": 10}
+    action_out = {"trajectory_xyh": rows(traj),
+                  "derived_for_display": {k: (None if v is None else round(v, 2)) for k, v in summary.items()}}
+
+    parts = [
+        "## Message trace: input → output per component",
+        "### 1 · Route matcher  (deterministic, HD map)",
+        "**in**", _json(route_in), "**out** `LaneRoute`", _json(route_out),
+        "### 2 · Trion-Reason  (slow, symbolic — mocked)",
+        "**in**", _json(reason_in), "**out** `ReasonMessage`", _json(reason_out),
+        "### 3 · Resolver  (deterministic, HD map)",
+        "**in**", _json(resolver_in), "**out** `ResolvedTarget`", _json(resolver_out),
+        "### 4 · Trion-Action  (fast, geometric — mocked)",
+        "**in**", _json(action_in), "**out** trajectory `[50, 3]` of (x, y, heading), ego frame", _json(action_out),
+        "_`derived_for_display` is not part of the output: reach, lateral and final speed are computed "
+        "from the trajectory for the figure; `commit_at_m` exists only in this mock._",
+    ]
+    return "\n\n".join(parts)
+
+
+def own_lane_short(res) -> str:
+    for name, ok, note in res.checks:
+        if name == "localized in a lane" and ok:
+            return note.split()[-1]
+    return "?"
+
+
+def _flow_column(axis, boxes, width: int = 46) -> None:
+    """Components as stacked boxes with IN / OUT sections; arrows carry the message names.
+
+    The point of the drawing is the contract: what each component receives, what it hands on,
+    and what the thing travelling between two boxes is called.
+    """
+    import textwrap
+
+    import matplotlib.patches as patches
+
+    line_h, head_h, pad, gap = 0.0168, 0.028, 0.010, 0.036
+    y = 0.995
+    for title, colour, ins, outs, message in boxes:
+        in_lines = [w for text in ins for w in (textwrap.wrap(text, width) or [""])]
+        out_lines = [w for text in outs for w in (textwrap.wrap(text, width) or [""])]
+        height = head_h + pad + (len(in_lines) + len(out_lines)) * line_h + 0.012 + pad
+        axis.add_patch(patches.FancyBboxPatch(
+            (0.0, y - height), 1.0, height, boxstyle="round,pad=0.006", transform=axis.transAxes,
+            facecolor=colour, alpha=0.06, edgecolor="none", clip_on=False))
+        axis.add_patch(patches.FancyBboxPatch(
+            (0.0, y - height), 1.0, height, boxstyle="round,pad=0.006", transform=axis.transAxes,
+            facecolor="none", edgecolor=colour, linewidth=1.2, clip_on=False))
+        axis.text(0.015, y - 0.006, title, transform=axis.transAxes, fontsize=8.6, fontweight="bold",
+                  color=colour, va="top", family="monospace")
+        cursor = y - head_h - pad
+        for label, lines, colour_l, bold in (("IN", in_lines, "#5d666b", False),
+                                             ("OUT", out_lines, "#1b1f22", True)):
+            axis.text(0.02, cursor, label, transform=axis.transAxes, fontsize=7.4, fontweight="bold",
+                      color=colour_l, va="top", family="monospace")
+            for line in lines:
+                red = line.startswith("[mock]")
+                soft = line.startswith(("viz:", "why:"))
+                axis.text(0.11, cursor, line, transform=axis.transAxes, fontsize=6.9, va="top",
+                          family="monospace", color="#c0392b" if red else colour_l,
+                          fontweight="bold" if (bold and not soft and not red) else "normal")
+                cursor -= line_h
+            cursor -= 0.012
+        bottom = y - height
+        if message:
+            axis.annotate("", xy=(0.5, bottom - gap + 0.004), xytext=(0.5, bottom - 0.004),
+                          xycoords=axis.transAxes, textcoords=axis.transAxes,
+                          arrowprops=dict(arrowstyle="-|>", color="#444", lw=1.3))
+            axis.text(0.53, bottom - gap / 2, message, transform=axis.transAxes, fontsize=7.4,
+                      fontweight="bold", color="#444", va="center", family="monospace")
+        y = bottom - gap
 
 
 def _card(axis, title, rows, y, colour="#2f3437", width=40):
@@ -764,66 +861,77 @@ def trion_figure(path, sample, command, nav_choice, route, msg, res, traj, summa
     figure = plt.figure(figsize=(21.0, 7.4))
     outer = figure.add_gridspec(1, 3, width_ratios=[0.92, 1.85, 1.25], wspace=0.05)
 
-    # -- column 1: the pipeline as cards ----------------------------------------------
+    # -- column 1: the pipeline as boxes, IN and OUT per component, messages on the arrows --
     card = figure.add_subplot(outer[0])
     card.set_axis_off()
-    y = 0.99
-    y = _card(card, "INPUT", [
-        ("in", f"scene {sample.token[:8]}, ego {sample.initial_speed:.1f} m/s, cameras + HD map"),
-        ("in", f'nav app: "{nav_choice}"'),
-        ("in", f'voice: "{command}"')], y)
+    checks_short = []
+    for name, ok, note in res.checks:
+        short = {"localized in a lane": "localized", "divider is crossable": "divider crossable",
+                 "target lane continues past the window": "target continues",
+                 "target lane is a distinct lane": "target distinct",
+                 "window fitted to the map": "window fitted", "fallback": "fallback"}.get(name, name)
+        checks_short.append(f"{'✓' if ok else '✗'} {short}" + ("" if ok else f": {note}"))
+    fitted = next((note for name, _, note in res.checks if name == "window fitted to the map"), None)
+
     if route.get("matched"):
-        nav_rows = [("msg", f"{route['manoeuvre']}" + (f" at {route['at_m']:.0f} m" if route.get("at_m") else "")),
-                    ("msg", f"lanes {route['lanes']}, ego in lane {route['current_lane'] + 1}"
-                            + (f", valid {[i + 1 for i in route['valid']]}" if route.get("valid") is not None else ""))]
+        route_out = [f"{route['manoeuvre']}" + (f" at {route['at_m']:.0f} m" if route.get("at_m") else ""),
+                     f"lanes {route['lanes']}, ego in lane {route['current_lane'] + 1}"
+                     + (f", valid {[i + 1 for i in route['valid']]}" if route.get("valid") is not None else "")]
         if route.get("changes_needed"):
-            nav_rows.append(("msg", f"needs {route['changes_needed']} change(s) {route['direction'].lower()}"))
+            route_out.append(f"needs {route['changes_needed']} change(s) {route['direction'].lower()}")
+        else:
+            route_out.append("no lane change needed")
     else:
-        nav_rows = [("msg", f"{route['manoeuvre']}: unmatched - {route.get('reason', '')}")]
-    y = _card(card, "ROUTE MATCHER  (SD route -> HD lanes)", nav_rows, y, colour="#1a7f5a")
-    reason_rows = [
-        ("msg", f"lateral   {msg.lateral}   (source: {msg.source})"),
-    ]
+        route_out = [f"{route['manoeuvre']}: unmatched", route.get("reason", "")]
+
+    reason_out = [f"lateral {msg.lateral}   source {msg.source}"]
     if msg.lateral != "KEEP":
-        reason_rows += [("msg", f"window    {msg.window_m[0]:.0f}-{msg.window_m[1]:.0f} m"),
-                        ("msg", f"deadline  {msg.deadline_m:.0f} m")]
+        reason_out.append(f"window {msg.window_m[0]:.0f}-{msg.window_m[1]:.0f} m, deadline {msg.deadline_m:.0f} m")
     if msg.pending:
-        reason_rows.append(("msg", f"pending   {msg.pending}"))
+        reason_out.append(f"pending: {msg.pending}")
     if msg.reroute:
-        reason_rows.append(("msg", "reroute   requested from the nav app"))
-    reason_rows += [("msg", f"cruise    {msg.cruise_label}   ({SPEED_KMH(res.speed_cap)})"),
-                    ("msg", f"stop      {msg.planned_stop or '-'}"),
-                    ("msg", f"why: {msg.why}")]
-    y = _card(card, "TRION-REASON  (slow, symbolic)", reason_rows, y, colour="#7b3fa0")
+        reason_out.append("reroute: ask the nav app")
+    reason_out += [f"cruise {msg.cruise_label}  stop {msg.planned_stop or '-'}",
+                   f"why: {msg.why}"]
 
-    resolver_rows = [("msg", f"{'✓' if ok else '✗'} {name}: {note}") for name, ok, note in res.checks]
-    resolver_rows.append(("msg", "REJECTED -> fallback KEEP" if res.fallback else f"accepted: drive {res.lateral}"))
+    resolver_out = ["REJECTED -> fallback KEEP" if res.fallback else f"accepted: drive {res.lateral}",
+                    *checks_short]
     if res.lateral != "KEEP":
-        resolver_rows.append(("msg", f"corridors: current + target, window {res.window_m[0]:.0f}-{res.window_m[1]:.0f} m"))
-    resolver_rows.append(("msg", f"speed cap {res.speed_cap:.1f} m/s" + (f", stop at {res.stop_x:.0f} m" if res.stop_x is not None else "")))
-    y = _card(card, "RESOLVER  (HD map, deterministic)", resolver_rows, y, colour="#1f5f8b")
+        resolver_out.append(f"window {res.window_m[0]:.0f}-{res.window_m[1]:.0f} m"
+                            + (f"  (was {fitted.split(' -> ')[0]})" if fitted else ""))
+    resolver_out.append(f"speed cap {res.speed_cap:.1f} m/s" + (f", stop at {res.stop_x:.0f} m" if res.stop_x is not None else ""))
+    resolver_out.append("current + target corridors -> map")
 
-    action = [("out", "trajectory 50 x (x, y, heading), 5 s @ 10 Hz -> camera + map"),
-              ("viz", f"reach   {summary['reach_m']:.0f} m in 5 s   (x of last point)"),
-              ("viz", f"lateral {summary['lateral_move_m']:+.1f} m vs own lane  (y - lane centre)"),
-              ("viz", f"speed   {sample.initial_speed:.1f} -> {summary['final_speed']:.1f} m/s  (point spacing x 10 Hz)")]
+    action_out = ["trajectory 50 x (x, y, heading), 5 s @ 10 Hz -> camera + map",
+                  f"viz: reach {summary['reach_m']:.0f} m, lateral {summary['lateral_move_m']:+.1f} m, "
+                  f"{sample.initial_speed:.1f} -> {summary['final_speed']:.1f} m/s"]
+    if summary["commit_at_m"] and summary["commit_at_m"] > summary["reach_m"]:
+        action_out.append(f"this tick is the approach; change scheduled at {summary['commit_at_m']:.0f} m, beyond 5 s")
     if summary["commit_at_m"]:
-        if summary["commit_at_m"] > summary["reach_m"]:
-            action.append(("out", f"this tick: approach only; the change is scheduled at "
-                                  f"{summary['commit_at_m']:.0f} m, beyond the 5 s horizon, and "
-                                  f"executes on a later tick"))
-        action.append(("mock", f"commits at {summary['commit_at_m']:.0f} m: fixed 35% into the window; "
-                               f"a real planner needs a head for this"))
-    y = _card(card, "TRION-ACTION  (fast, geometric)", action, y, colour="#b5651d")
+        action_out.append(f"[mock] commits at {summary['commit_at_m']:.0f} m (fixed 35% into the window)")
 
-    # The key lives in the figure footer so it can never be pushed off the column.
-    x = 0.015
-    for tag, meaning in TAG_KEY:
-        figure.text(x, 0.008, tag, fontsize=7.4, fontweight="bold", color=TAG_COLOURS[tag],
-                    family="monospace", va="bottom")
-        figure.text(x + 0.004 + 0.0032 * len(tag), 0.008, f"= {meaning}     ", fontsize=7.4,
-                    color="#5d666b", family="monospace", va="bottom")
-        x += 0.006 + 0.0032 * (len(tag) + len(meaning) + 7)
+    boxes = [
+        ("ROUTE MATCHER  (HD map, deterministic)", "#1a7f5a",
+         [f'nav step: "{nav_choice}"', f"ego lane {own_lane_short(res)}, HD lane graph"],
+         route_out, "LaneRoute"),
+        ("TRION-REASON  (slow, symbolic - mocked)", "#7b3fa0",
+         ["LaneRoute", f'voice: "{command}"', f"preference {msg.cruise_label}, ego {sample.initial_speed:.1f} m/s"],
+         reason_out, "ReasonMessage"),
+        ("RESOLVER  (HD map, deterministic)", "#1f5f8b",
+         ["ReasonMessage + LaneRoute", "HD map: lanes, dividers, drivable area", "localization"],
+         resolver_out, "ResolvedTarget"),
+        ("TRION-ACTION  (fast, geometric - mocked)", "#b5651d",
+         ["ResolvedTarget", f"ego {sample.initial_speed:.1f} m/s, cameras (Etha tokens in the real system)"],
+         action_out, None),
+    ]
+    _flow_column(card, boxes)
+    figure.text(0.015, 0.008,
+                "IN / OUT per component; arrows carry the message that travels between them.   "
+                "[msg] real inter-system message   [out] real system output   "
+                "viz: derived from the output for display   ",
+                fontsize=7.4, color="#5d666b", family="monospace", va="bottom")
+    figure.text(0.735, 0.008, "[mock] exists only in this mock", fontsize=7.4, color="#c0392b",
+                family="monospace", va="bottom", fontweight="bold")
 
     # -- column 2: front camera ------------------------------------------------------
     hero = figure.add_subplot(outer[1])
