@@ -107,7 +107,11 @@ def load_scenes(args):
                                      num_history_points=16))
         for index, sample in enumerate(found):
             turn = turns[sample.scene.nav_command]
-            labels.append(f"nuscenes {index:03d} - {turn}, {sample.initial_speed:.1f} m/s")
+            # tools/nuscenes_lane_change.py writes this; absent until that has been run.
+            mark = ", LANE CHANGE" if sample.scene.metadata.get("lane_change") else ""
+            labels.append(
+                f"nuscenes {index:03d} - {turn}, {sample.initial_speed:.1f} m/s{mark}"
+            )
         samples.extend(found)
         print(f"loaded {len(found)} nuScenes scenes from {extra.name}")
     return samples, labels

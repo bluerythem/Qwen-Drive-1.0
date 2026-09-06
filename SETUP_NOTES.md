@@ -214,3 +214,42 @@ onto the vehicles and barriers in all six cameras, so the extrinsics are right.
 
 The overlay is drawn in `save_plan_figure()` in `app.py` on the figure `plot_scene_summary`
 returns, rather than as another change to upstream `visualize.py`.
+
+
+## Lane changes: there are none in nuScenes mini
+
+`tools/nuscenes_lane_change.py` annotates a scene file in place with
+`meta_info.lane_change`, and the app appends **`, LANE CHANGE`** to a scene's dropdown label
+when that flag is set. Run it after building the scenes:
+
+    python tools/nuscenes_lane_change.py --scenes data/nuscenes_scenes.jsonl
+
+On the mini split it flags **0 of 255**, and that is the correct answer, not a broken
+detector. Evidence:
+
+- Intersecting each of the 10 full drives with the map's `lane_divider` polylines gives
+  **one** crossing in total, in scene-0061 at 10.9 m into a 91 m drive - keyframe #2, which
+  is before the first window that has the 1.5 s of history a scene needs, so no scene covers
+  it. The other nine drives never cross a divider.
+- 22 scenes do shift sideways by more than 1.5 m while staying near-straight, but none cross
+  a divider. They are road curvature: idx 198 moves 2.8 m over ~70 m travelled at 14 m/s,
+  a ~875 m radius curve, with only 0.07 rad of heading change.
+- The largest lateral shifts (idx 0-22, up to +9.6 m) are one long left turn through a
+  junction, with heading building to ~1 rad. A turn is not a lane change.
+
+Mini is 10 scenes of dense urban driving, roughly 20 minutes, so this is unsurprising. The
+tool is written against the full trainval split too: build scenes from it and any lane
+changes will be flagged and labelled automatically.
+
+### Two detectors, and why the first was wrong
+
+The first version asked whether the end lane was reachable from the start lane through the
+map's lane graph. It flagged 25 scenes - all false. Lane records are short and their
+`outgoing` connectivity is sparse enough that an ordinary straight drive often ends in an
+"unreachable" lane. The flagged scenes averaged **less** lateral motion than the unflagged
+ones (0.47 m against 0.55 m), which is what exposed it.
+
+The geometric test that replaced it needed one fix of its own: shapely's `crosses` requires
+an interior-interior intersection, but dividers are short two-point segments that a path
+frequently meets at an endpoint, so the test uses `intersects`. That was caught by probing a
+divider with a synthetic path built to cross it and getting `False` back.
