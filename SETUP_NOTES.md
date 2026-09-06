@@ -341,12 +341,19 @@ leftmost lane with two `DOUBLE_DASHED_WHITE` lanes to its right. Three mocked co
 | --- | --- | --- | --- |
 | GO STRAIGHT | hold the lane | 59.7 m | -0.13 m |
 | CHANGE LANE RIGHT | smoothstep across to the right lane centre | 59.7 m | -3.38 m |
-| CHANGE LANE LEFT | pull over to the kerb and stop | 29.8 m | +0.51 m |
+| CHANGE LANE LEFT | pull over to the kerb and stop | 29.8 m | +1.14 m |
 
 `CHANGE LANE LEFT` becomes a pull-over because there is no lane to the ego's left here, only
-the kerb, and it decelerates to a stop - which is why it reaches half as far. The lateral
-move is small because the ego is already in the leftmost lane; the stop is what makes the
-manoeuvre read.
+the kerb, and it decelerates to a stop - which is why it reaches half as far.
+
+Since no lane exists there, one is imagined: a pull-over lane running **parallel to the ego's
+own lane**, offset by the kerb distance measured near the ego minus half a lane width, so the
+car ends up against the drivable edge. Tracking the measured boundary directly does not work
+on this scene - it drifts from 2.1 m to 0.6 m over 70 m while the lane itself stays straight,
+which bent the target across the ego's own lane.
+
+Navigation targets start **10 m ahead of the ego** rather than at the bumper: a route hint is
+about where to be shortly, and the gap keeps the ego and the start of its plan readable.
 
 `tools/mock_planning.py` builds both the navigation target (the thick translucent noodle,
 drawn along the centre of the lane the command points at) and the trajectory, from the map
