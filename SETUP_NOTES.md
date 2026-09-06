@@ -142,15 +142,53 @@ what the perception-frame tab is forced to assume:
 - Only 255 of 404 keyframes qualify: a sample needs 1.5 s of camera history before it and
   5 s of recorded pose after it, which drops the ends of each scene.
 
-### Overlaying the predicted BEV map under the trajectory
+### Overlaying a BEV map under the trajectory
 
-The Planning tab has an **"Overlay the predicted BEV map under the trajectory"** checkbox.
-It runs the BEV head on the same keyframe and draws the predicted map raster beneath the
-plan. No transform is involved: `docs/perception.md` says the map raster is indexed in ego
+The Planning tab has a **"Map under the trajectory"** choice: `none`, `predicted` (the BEV
+head on the same keyframe) or `ground truth` (the nuScenes map expansion, rasterized by
+`tools/nuscenes_map_gt.py`). Both are nuScenes-only.
+
+No transform is involved: `docs/perception.md` says the map raster is indexed in ego
 coordinates with X forward and Y left, which is exactly the frame the trajectories use, so
 it goes straight into `imshow` at `extent=(15, -15, -30, 30)` (60 m x 30 m at 0.15 m).
 
-It only works on the nuScenes scenes, because the BEV head needs the full camera ring and
+#### Ground-truth maps
+
+    # 398 MB, from Motional's public bucket; the nuScenes non-commercial licence applies
+    curl -L -o /tmp/map-expansion.zip \
+      https://motional-nuscenes.s3.amazonaws.com/public/v1.0/nuScenes-map-expansion-v1.3.zip
+    unzip -q /tmp/map-expansion.zip -d data/nuscenes/maps
+    uv pip install nuscenes-devkit
+
+`NuScenesMapGT.raster(sample_token)` calls the devkit's `get_map_mask` for a 60 m x 30 m
+patch at the keyframe's ego pose and heading, then folds the nuScenes layers into the
+model's six classes:
+
+| model class | nuScenes source |
+| --- | --- |
+| driveable_surface | `drivable_area` |
+| walkway | `walkway` |
+| crosswalk | `ped_crossing` |
+| road_line | `lane_divider` + `road_divider` |
+| road_edge | boundary of `drivable_area` (nuScenes has no road-edge layer) |
+
+Two things had to be checked rather than assumed:
+
+- **Orientation.** The devkit returns `(h, w)` for `canvas_size=(200, 400)` with the patch
+  box as `(x, y, height, width)`, so rows are Y and columns X, same as the model's grid.
+  Confirmed by scoring drivable-surface IoU of prediction against ground truth over 12
+  frames under every flip: as-is **0.799**, flip-Y 0.335, flip-X 0.530, flip-both 0.293.
+  As-is wins by a wide margin, so no flip is applied.
+- That 0.80 IoU also cross-validates both sides: the perception head and the rasterizer
+  agree on where the road is.
+
+Note the mini tar's own `maps/*.png` are only `semantic_prior` masks - a binary
+drivable-area raster at 10 px/m, no lanes or crosswalks. The expansion pack is what carries
+the vector layers.
+
+### Overlaying the predicted BEV map under the trajectory
+
+The `predicted` choice only works on the nuScenes scenes, because the BEV head needs the full camera ring and
 calibration and the WOD-E2E demo scenes carry neither. Asking for it on a demo scene returns
 a note saying so rather than failing.
 

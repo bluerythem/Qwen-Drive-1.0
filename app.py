@@ -31,6 +31,9 @@ from qwen_drive.scene import CAMERA_VIEWS, NAV_COMMANDS
 from qwen_drive.visualize import plot_scene_summary
 
 ROOT = Path(__file__).parent
+import sys
+
+sys.path.insert(0, str(ROOT / "tools"))
 OUT = ROOT / "outputs" / "interactive"
 
 # The four bundled scenes, in file order, described in the README.
@@ -61,6 +64,7 @@ MAP_EXTENT = (15.0, -15.0, -30.0, 30.0)   # imshow (left, right, bottom, top) in
 lock = threading.Lock()
 state = {"planner": None}
 perception = {}          # lazily built head + processor
+gt_map = {}              # lazily built NuScenesMapGT
 perception_cache = {}    # frame token -> inference result
 
 
@@ -115,7 +119,7 @@ def select_planner(name: str):
         state["planner"] = name
 
 
-def plan(scene_label, nav_label, mode_label, planner_name, num_samples, seed, map_overlay,
+def plan(scene_label, nav_label, mode_label, planner_name, num_samples, seed, map_choice,
          progress=gr.Progress()):
     index = LABELS.index(scene_label)
     sample = SAMPLES[index]
@@ -130,16 +134,30 @@ def plan(scene_label, nav_label, mode_label, planner_name, num_samples, seed, ma
     results = {}
     map_grid, map_note = None, ""
     with lock:
-        if map_overlay:
+        if map_choice == "predicted":
             frame_dir = NS_PERCEPTION_DIR / sample.token
             if frame_dir.is_dir():
                 progress(0.05, desc="running the BEV head")
                 map_grid = perception_result(frame_dir)["map"]
+                map_note = "\n\nUnder the trajectory: the **predicted** BEV map from the perception head."
             else:
                 map_note = (
                     "\n\n⚠️ No predicted map: this scene has no packed perception frame. "
                     "Only the nuScenes scenes have one, because the BEV head needs the full "
                     "camera ring and calibration, which the WOD-E2E demo scenes do not carry."
+                )
+        elif map_choice == "ground truth":
+            progress(0.05, desc="rasterizing the nuScenes map")
+            map_grid = ground_truth_map(sample.token)
+            if map_grid is not None:
+                map_note = (
+                    "\n\nUnder the trajectory: the **ground-truth** map from the nuScenes map "
+                    "expansion (road edge = drivable-area boundary; road line = lane + road dividers)."
+                )
+            else:
+                map_note = (
+                    "\n\n⚠️ No ground-truth map: needs a nuScenes scene and "
+                    "`data/nuscenes/maps/expansion/` from the map-expansion pack."
                 )
         progress(0.05, desc=f"loading {planner_name}")
         select_planner(planner_name)
@@ -323,6 +341,22 @@ def map_raster_rgb(grid: np.ndarray) -> np.ndarray:
     return palette[labels].transpose(1, 0, 2)[::-1, ::-1]
 
 
+def ground_truth_map(token: str):
+    """The nuScenes map-expansion raster for a keyframe, or None if unavailable."""
+    if "helper" not in gt_map:
+        from nuscenes_map_gt import NuScenesMapGT
+
+        helper = NuScenesMapGT(ROOT / "data" / "nuscenes")
+        gt_map["helper"] = helper if helper.available() else None
+    helper = gt_map["helper"]
+    if helper is None or token not in helper.pose:
+        return None
+    key = f"gt:{token}"
+    if key not in perception_cache:
+        perception_cache[key] = helper.raster(token)
+    return perception_cache[key]
+
+
 def save_plan_figure(path, map_grid=None, **kwargs) -> None:
     """plot_scene_summary, optionally with the predicted BEV map drawn underneath."""
     import matplotlib.patches as patches
@@ -413,10 +447,12 @@ def build_ui():
                 )
                 samples_sl = gr.Slider(1, 12, value=6, step=1, label="Trajectories to sample")
                 seed_nb = gr.Number(value=42, precision=0, label="Noise seed")
-            map_cb = gr.Checkbox(
-                value=False,
-                label="Overlay the predicted BEV map under the trajectory",
-                info="nuScenes scenes only: runs the BEV head on the same keyframe",
+            map_rd = gr.Radio(
+                ["none", "predicted", "ground truth"],
+                value="none",
+                label="Map under the trajectory",
+                info="nuScenes scenes only. predicted = BEV head on the same keyframe; "
+                     "ground truth = nuScenes map expansion",
             )
             plan_btn = gr.Button("Plan", variant="primary")
             plot_im = gr.Image(label="Camera ring and predicted trajectories", type="filepath")
@@ -424,7 +460,7 @@ def build_ui():
             metrics_md = gr.Markdown()
             plan_btn.click(
                 plan,
-                [scene_dd, nav_rd, mode_rd, planner_rd, samples_sl, seed_nb, map_cb],
+                [scene_dd, nav_rd, mode_rd, planner_rd, samples_sl, seed_nb, map_rd],
                 [plot_im, reason_tb, metrics_md],
                 api_name="plan",
             )
