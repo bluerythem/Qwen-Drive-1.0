@@ -327,50 +327,53 @@ x ~ 0 and the equal aspect ratio squashes it. `_floor_longitudinal_span` gives t
 20 m minimum so the stopped scenes render.
 
 
-## The "Planning mock" tab
+## The "Trion mock" tab: two systems and a resolver, end to end
 
-**No model runs on this tab.** The released Planning Expert's command vocabulary is only
-straight / left / right - there is no lane-change command to give it - so showing what one
-would look like means mocking both halves of the interface.
+**No neural network runs on this tab.** It exercises the interface of a two-system stack:
 
-Fixed to `nuscenes 147`: a three-lane road in singapore-queenstown, ego at 11.9 m/s in the
-leftmost lane with two `DOUBLE_DASHED_WHITE` lanes to its right. Three mocked commands, and
-`ALL THREE` overlays them:
+    voice command -> Trion-Reason (slow, symbolic) -> Resolver (HD map) -> Trion-Action (fast)
 
-| command | mocked future | reach | lateral move |
-| --- | --- | --- | --- |
-| GO STRAIGHT | hold the lane | 59.7 m | -0.13 m |
-| CHANGE LANE RIGHT | smoothstep across to the right lane centre | 59.7 m | -3.38 m |
-| CHANGE LANE LEFT | pull over to the kerb and stop | 29.8 m | +1.14 m |
+- **Trion-Reason** (`tools/trion.py: reason`) is a rule-based stand-in for the reasoning
+  model. A command in, a *symbolic* goal out: lane-relative `lateral` (KEEP / LEFT / RIGHT /
+  PULL_OVER) with a **window** and a **deadline** in metres, a `cruise` preference relative to
+  the speed limit, a planned stop, and which traffic light matters. Never geometry. It also
+  deliberately does not check whether a lane exists - letting a bad request through is what
+  makes the validation path visible.
+- **Resolver** (`Resolver`) is the one real component: deterministic nuScenes map logic.
+  It localizes the ego in a lane, walks `connectivity` to build the current corridor, probes
+  the requested side every 4 m to classify what is there (lane / junction connector / nothing),
+  fits the window to the stretch where a proper lane exists, checks the divider marking, the
+  target's continuity, and that it is a *distinct* lane, then emits two corridors, the fitted
+  window, a speed cap and any stop point. Any failed check rejects the request and falls back
+  to KEEP, with the reason shown.
+- **Trion-Action** (`act`) is a stand-in for the fast planner: a comfort-bounded speed profile
+  towards the cap (or a 2.5 m/s^2 stop), and the lateral move placed *inside* the window - it
+  "commits" 35% of the way in, standing in for gap acceptance.
 
-`CHANGE LANE LEFT` becomes a pull-over because there is no lane to the ego's left here, only
-the kerb, and it decelerates to a stop - which is why it reaches half as far.
+The figure is a left-to-right story for a non-specialist: the three stages as cards, the
+front camera with the target ribbon and the plan projected onto it, and a bird's-eye panel
+with both corridors, the window and stop markers. The lateral axis of that panel is
+stretched; it says so in the title.
 
-Since no lane exists there, one is imagined: a pull-over lane running **parallel to the ego's
-own lane**, offset by the kerb distance measured near the ego minus half a lane width, so the
-car ends up against the drivable edge. Tracking the measured boundary directly does not work
-on this scene - it drifts from 2.1 m to 0.6 m over 70 m while the lane itself stays straight,
-which bent the target across the ego's own lane.
+What the four canned commands show on `nuscenes 147` (ego 11.9 m/s, kerb lane of three):
 
-Navigation targets start **10 m ahead of the ego** rather than at the bumper: a route hint is
-about where to be shortly, and the gap keeps the ego and the start of its plan readable.
+| command | resolver | outcome |
+| --- | --- | --- |
+| change to the right lane | window **fitted 12-45 -> 40-70 m**: a side-road junction sits beside the road at 16-36 m and you do not change lanes into a junction | drives RIGHT, -3.0 m, commits at 50 m |
+| change to the left lane | **rejected**: the "lane" the map has on the left at 40 m is **0.0 m from the current centreline** - an overlapping record at a split, not a lane | fallback KEEP |
+| pull over | kerb boundary 2.2 m left; stop at 28 m (2.5 m/s^2 from 11.9 m/s) | drives PULL_OVER, +1.3 m, rests at 0 m/s |
+| keep going | localized, nothing else to check | KEEP, accelerates to the 50 km/h cap |
 
-`tools/mock_planning.py` builds both the navigation target (the thick translucent noodle,
-drawn along the centre of the lane the command points at) and the trajectory, from the map
-alone. Lateral moves use a smoothstep so there is no kink, and headings come from the
-gradient, so the output has the same `[50, 3]` shape as the model's and is drawn by the same
-code.
+Assumptions worth saying out loud in the room: the speed limit is **assumed** 50 km/h -
+nuScenes' map has none; "commits at" is a fixed fraction of the window, not a gap model; and
+`lateral` is measured against the current lane's centreline, so following a curving lane
+reads as 0.0 and a lane change reads as one lane width.
 
-Two fixes came out of building it:
-
-- The **left kerb** cannot be found by interpolating the drivable-area ring: a polygon wraps
-  around, so its points are neither sorted in x nor single-valued in y. It is now the
-  *nearest* boundary point above the ego at each x.
-- The drivable polygon is **clipped to the patch**, and the cut runs along the patch border,
-  so drawing the boundary as a road edge painted one straight across the road 30 m ahead of
-  the ego. Boundary runs that lie on the patch border are now skipped.
-
-
+Three things the build corrected along the way, each caught by looking at the output:
+a majority vote across probe distances was needed because one stray hit 40 m ahead had
+conjured a lane beside a kerb; lane records are ~40 m long, so the neighbour spans several
+tokens and hits must be counted rather than tokens; and the pull-over's lateral move has to
+finish *before* the stop, not after it.
 ### Drawing the plans on the camera images
 
 Both the navigation target and the mocked trajectory are also projected onto the **current

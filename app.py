@@ -418,8 +418,10 @@ def _inside_patch(loop, margin: float = 0.4):
     +/-15 m laterally and +/-30 m longitudinally; points sitting on that box are the cut,
     not real geometry.
     """
-    half_lateral = abs(MAP_EXTENT[0]) - margin
-    half_longitudinal = abs(MAP_EXTENT[2]) - margin
+    # The patch is whatever the geometry was clipped to; read it off the ring itself so a
+    # larger map request does not lose its road edges beyond the default 30 m.
+    half_longitudinal = max(abs(MAP_EXTENT[2]), float(np.abs(loop[:, 0]).max())) - margin
+    half_lateral = max(abs(MAP_EXTENT[0]), float(np.abs(loop[:, 1]).max())) - margin
     inside = ((np.abs(loop[:, 0]) < half_longitudinal)
               & (np.abs(loop[:, 1]) < half_lateral))
     padded = np.concatenate([[False], inside, [False]])
@@ -606,12 +608,14 @@ def run_perception_frame(token, score_thr, progress=gr.Progress()):
 
 
 # ---------------------------------------------------------------------------
-# Planning mock: no model runs here. The trajectories are hand-built from the map so the
-# interface can be shown with a lane-change command, which the released planner has no
-# vocabulary for - its commands are only straight, left and right.
+# Trion mock: Trion-Reason (symbols) -> Resolver (HD map) -> Trion-Action (trajectory).
+# No neural network runs. Only the resolver is real; the two systems are rule-based
+# stand-ins so the interface between them can be exercised and shown.
 # ---------------------------------------------------------------------------
 
-MOCK_SCENE = "nuscenes 147"
+TRION_SCENES = ("nuscenes 147", "nuscenes 186", "nuscenes 199", "nuscenes 203")
+TRION_COMMANDS = ("keep going", "change to the right lane", "change to the left lane",
+                  "pull over", "go faster", "go slower")
 
 
 def camera_rig():
@@ -626,139 +630,182 @@ def camera_rig():
     return gt_map["rig"]
 
 
-def mock_scene_index() -> int | None:
-    return next((i for i, label in enumerate(LABELS) if label.startswith(MOCK_SCENE)), None)
+def trion_scene_labels() -> list[str]:
+    return [label for label in LABELS if any(label.startswith(s + " ") for s in TRION_SCENES)]
 
 
-def mock_figure(path, scene, overlays, noodles, map_geoms, camera_overlays, title) -> None:
-    """Thumbnails, one large current front frame, and the bird's-eye panel.
+def trion_run(scene_label, command_choice, custom_command, preference, progress=gr.Progress()):
+    from trion import Resolver, act, reason
 
-    plot_scene_summary gives every camera frame an equal cell, which is right when they are
-    all read equally. Here the front camera's current frame is the one carrying the
-    projected plan, so it gets a column of its own. Enlarging a single cell of a uniform
-    grid does not work - the other cells in its row and column inherit the extra room and
-    their images float in the middle of it - so the montage stays uniform, just small,
-    alongside. Rows are still views and columns still timestamps.
-    """
-    import matplotlib.lines as mlines
-    import matplotlib.pyplot as plt
-    from qwen_drive.visualize import _draw_trajectories, _view_label
-
-    frames = {view: [frame.load() for frame in scene.views[view]] for view in CAMERA_VIEWS}
-    columns = scene.num_camera_frames
-
-    figure = plt.figure(figsize=(21.0, 7.2))
-    outer = figure.add_gridspec(1, 3, width_ratios=[0.95, 1.8, 1.3], wspace=0.06)
-
-    montage = outer[0].subgridspec(len(CAMERA_VIEWS), columns, wspace=0.03, hspace=0.08)
-    for row, view in enumerate(CAMERA_VIEWS):
-        for column in range(columns):
-            ax = figure.add_subplot(montage[row, column])
-            ax.set_xticks([])
-            ax.set_yticks([])
-            image = frames[view][column]
-            ax.imshow(image)
-            ax.set_box_aspect(image.height / image.width)
-            if column == 0:
-                ax.set_ylabel(_view_label(view), fontsize=8, rotation=90, labelpad=4)
-            if row == 0:
-                ax.set_title(f"t-{(columns - 1 - column) * 0.5:.1f}s", fontsize=7,
-                             color="#2f3437")
-
-    hero = figure.add_subplot(outer[1])
-    hero.set_xticks([])
-    hero.set_yticks([])
-    hero.imshow(frames[CAMERA_VIEWS[0]][-1])
-    hero.set_title("Front, current frame (t-0.0s)", fontsize=10, color="#2f3437")
-    xlim, ylim = hero.get_xlim(), hero.get_ylim()
-    for item in camera_overlays.get(CAMERA_VIEWS[0], []):
-        if item["kind"] == "band":
-            hero.fill(item["uv"][:, 0], item["uv"][:, 1], color=item["colour"],
-                      alpha=item["alpha"], linewidth=0, zorder=4)
-        else:
-            hero.plot(item["uv"][:, 0], item["uv"][:, 1], color=item["colour"],
-                      linewidth=item["width"] * 1.6, alpha=item["alpha"],
-                      solid_capstyle="round", zorder=5)
-    hero.set_xlim(xlim)
-    hero.set_ylim(ylim)
-
-    axis = figure.add_subplot(outer[2])
-    _draw_trajectories(axis, overlays[0][1], scene.history, None, 20.0, overlays)
-    axis.set_title(title, fontsize=10)
-    handles, labels = axis.get_legend_handles_labels()
-    extra_handles, extra_labels = paint_vector_map(axis, map_geoms)
-    for handle, label in zip(extra_handles, extra_labels):
-        if label not in set(labels):
-            handles.append(handle)
-            labels.append(label)
-    for label, polyline, colour in noodles or []:
-        axis.plot(polyline[:, 1], polyline[:, 0], color=colour, linewidth=13, alpha=0.28,
-                  solid_capstyle="round", zorder=0.6)
-        handles.append(mlines.Line2D([], [], color=colour, linewidth=7, alpha=0.45))
-        labels.append(label)
-    axis.legend(handles, labels, loc="lower left", fontsize=7, framealpha=0.92)
-    _floor_longitudinal_span(figure)
-
-    figure.subplots_adjust(left=0.03, right=0.99, top=0.92, bottom=0.06)
-    figure.savefig(path, dpi=150)
-    plt.close(figure)
-
-
-def mock_plan(command, progress=gr.Progress()):
-    from mock_planning import COMMAND_COLOURS, COMMANDS, targets, trajectory
-
-    index = mock_scene_index()
-    if index is None:
-        return None, f"{MOCK_SCENE} is not loaded; build data/nuscenes_scenes.jsonl first."
+    command = (custom_command or "").strip() or command_choice
+    index = LABELS.index(scene_label)
     sample = SAMPLES[index]
     token = sample.scene.metadata.get("token", "")
     speed = sample.initial_speed
-
     helper = _map_helper()
     if helper is None or token not in helper.pose:
         return None, "needs the nuScenes map expansion in data/nuscenes/maps/expansion/"
 
-    progress(0.3, desc="reading the map")
-    # A wide patch for the geometry the mock follows, the standard one for what is drawn.
+    progress(0.2, desc="Trion-Reason")
+    pref = {"slower": -1, "normal": 0, "faster": 1}[preference]
+    msg = reason(command, pref, {"speed": speed})
+
+    progress(0.4, desc="Resolver")
+    if "resolver" not in gt_map:
+        gt_map["resolver"] = Resolver(helper)
     geometry = helper.vector(token, half_length=70.0, half_width=25.0)
-    drawn = helper.vector(token)
-    wanted = list(COMMANDS) if command == "ALL THREE" else [command]
-    goals = targets(geometry, speed)
+    resolved = gt_map["resolver"].resolve(token, msg, geometry, speed=speed)
 
-    rig = camera_rig()
-    overlays, noodles, rows = [], [], []
-    camera_overlays: dict[str, list] = {}
-    for name in wanted:
-        path = trajectory(name, geometry, speed)
-        overlays.append((f"{name}", path[None], COMMAND_COLOURS[name]))
-        if name in goals:
-            noodles.append((f"{name} target", goals[name], COMMAND_COLOURS[name]))
-        rows.append(f"| {name} | {path[-1, 0]:.1f} | {path[-1, 1]:+.2f} | "
-                    f"{path[-1, 1] - path[0, 1]:+.2f} |")
-
-        if rig is not None and rig.has(token):
-            for view in CAMERA_VIEWS:
-                drawn_here = camera_overlays.setdefault(view, [])
-                if name in goals:
-                    band = rig.project_band(token, view, goals[name], width=1.1)
-                    if band is not None:
-                        drawn_here.append({"kind": "band", "uv": band,
-                                           "colour": COMMAND_COLOURS[name], "alpha": 0.32})
-                path_uv = rig.project(token, view, path[:, :2])
-                if path_uv is not None:
-                    drawn_here.append({"kind": "line", "uv": path_uv,
-                                       "colour": COMMAND_COLOURS[name], "width": 2.4,
-                                       "alpha": 0.95})
+    progress(0.7, desc="Trion-Action")
+    trajectory, summary = act(resolved, speed)
 
     OUT.mkdir(parents=True, exist_ok=True)
-    out_path = OUT / f"mock_{command.replace(' ', '_').lower()}.png"
-    mock_figure(out_path, sample.scene, overlays, noodles, drawn, camera_overlays,
-                title=f"{MOCK_SCENE} - mocked plans, no model")
-    table = ("| command | reach (m) | end y (m) | lateral move (m) |\n|---|---|---|---|\n"
-             + "\n".join(rows))
-    note = (f"Ego at **{speed:.1f} m/s** in the leftmost lane, two crossable lanes to its "
-            f"right. The pull-over decelerates to a stop, which is why it reaches less far.")
-    return str(out_path), f"{table}\n\n{note}"
+    out_path = OUT / f"trion_{index}_{resolved.requested.lower()}.png"
+    trion_figure(out_path, sample, command, msg, resolved, trajectory, summary,
+                 helper.vector(token, half_length=95.0, half_width=14.0), camera_rig(), token)
+
+    ok = "".join("✓" if ok else "✗" for _, ok, _ in resolved.checks)
+    verdict = ("**rejected → fallback KEEP**" if resolved.fallback else "**accepted**")
+    lines = [
+        f"**Trion-Reason** → `{msg.lateral}`, cruise `{msg.cruise_label}`"
+        + (f", window {msg.window_m[0]:.0f}–{msg.window_m[1]:.0f} m" if msg.lateral != "KEEP" else "")
+        + f"  \n_{msg.why}_",
+        f"**Resolver** → {verdict} &nbsp;`{ok}`  \n"
+        + "  \n".join(f"{'✓' if ok else '✗'} {name} — {note}" for name, ok, note in resolved.checks),
+        f"**Trion-Action** → drives `{resolved.lateral}`: reaches {summary['reach_m']:.0f} m in 5 s, "
+        f"lateral {summary['lateral_move_m']:+.1f} m, ends at {summary['final_speed']:.1f} m/s "
+        f"(cap {resolved.speed_cap:.1f})"
+        + (f", commits to the change at {summary['commit_at_m']:.0f} m" if summary["commit_at_m"] else ""),
+    ]
+    return str(out_path), "\n\n".join(lines)
+
+
+def _card(axis, title, body, y, colour="#2f3437", width=44):
+    import textwrap
+
+    axis.text(0.0, y, title, transform=axis.transAxes, fontsize=9.5, fontweight="bold",
+              color=colour, va="top", family="monospace")
+    lines = []
+    for paragraph in body:
+        lines.extend(textwrap.wrap(paragraph, width) or [""])
+    axis.text(0.0, y - 0.035, "\n".join(lines), transform=axis.transAxes, fontsize=7.6,
+              va="top", family="monospace", color="#2f3437", linespacing=1.25)
+    return y - 0.035 - 0.0215 * (len(lines) + 1.2)
+
+
+def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig, token) -> None:
+    """Story left to right: the three stages as cards, the front camera, the map."""
+    import matplotlib.lines as mlines
+    import matplotlib.patches as patches
+    import matplotlib.pyplot as plt
+    from qwen_drive.visualize import _draw_trajectories
+
+    scene = sample.scene
+    figure = plt.figure(figsize=(21.0, 7.4))
+    outer = figure.add_gridspec(1, 3, width_ratios=[0.92, 1.85, 1.25], wspace=0.05)
+
+    # -- column 1: the pipeline as cards ----------------------------------------------
+    card = figure.add_subplot(outer[0])
+    card.set_axis_off()
+    y = 0.99
+    y = _card(card, "INPUT", [f'Scene: {sample.token[:8]}  ego {sample.initial_speed:.1f} m/s',
+                              f'Voice: "{command}"'], y)
+    y = _card(card, "TRION-REASON  (slow, symbolic)", [
+        f"lateral   {msg.lateral}" + (f"   window {msg.window_m[0]:.0f}-{msg.window_m[1]:.0f} m,"
+                                     f" deadline {msg.deadline_m:.0f} m" if msg.lateral != "KEEP" else ""),
+        f"cruise    {msg.cruise_label}   ({SPEED_KMH(res.speed_cap)})",
+        f"stop      {msg.planned_stop or '-'}",
+        f"light     {msg.which_light}",
+        "", *textwrap_lines(msg.why)], y, colour="#7b3fa0")
+    checks = [f"{'✓' if ok else '✗'} {name}: {note}" for name, ok, note in res.checks]
+    verdict = "REJECTED -> fallback KEEP" if res.fallback else f"accepted: drive {res.lateral}"
+    y = _card(card, "RESOLVER  (HD map, deterministic)", [*checks, "", verdict], y, colour="#1f5f8b")
+    action = [f"reach      {summary['reach_m']:.0f} m in 5 s",
+              f"lateral    {summary['lateral_move_m']:+.1f} m",
+              f"speed      {sample.initial_speed:.1f} -> {summary['final_speed']:.1f} m/s (cap {res.speed_cap:.1f})"]
+    if summary["commit_at_m"]:
+        action.append(f"commits at {summary['commit_at_m']:.0f} m  (gap accepted, mocked)")
+    if res.stop_x is not None:
+        action.append(f"stops at   {res.stop_x:.0f} m")
+    _card(card, "TRION-ACTION  (fast, geometric)", action, y, colour="#b5651d")
+
+    # -- column 2: front camera ------------------------------------------------------
+    hero = figure.add_subplot(outer[1])
+    hero.set_xticks([])
+    hero.set_yticks([])
+    hero.imshow(scene.views[CAMERA_VIEWS[0]][-1].load())
+    hero.set_title(f"Trion-Action on the front camera  -  {res.lateral}"
+                   + ("  (request rejected)" if res.fallback else ""), fontsize=10, color="#2f3437")
+    xlim, ylim = hero.get_xlim(), hero.get_ylim()
+    if rig is not None and rig.has(token):
+        s_min = res.window_m[0] if res.lateral != "KEEP" else 10.0
+        ahead = res.target_xy[res.target_xy[:, 0] >= s_min]
+        band = rig.project_band(token, CAMERA_VIEWS[0], ahead, width=1.1)
+        if band is not None:
+            hero.fill(band[:, 0], band[:, 1], color=res.colour, alpha=0.32, linewidth=0, zorder=4)
+        uv = rig.project(token, CAMERA_VIEWS[0], traj[:, :2])
+        if uv is not None:
+            hero.plot(uv[:, 0], uv[:, 1], color="#111111", linewidth=3.6, alpha=0.95,
+                      solid_capstyle="round", zorder=5)
+            hero.plot(uv[:, 0], uv[:, 1], color=res.colour, linewidth=2.0, alpha=1.0,
+                      solid_capstyle="round", zorder=6)
+    hero.set_xlim(xlim)
+    hero.set_ylim(ylim)
+
+    # -- column 3: bird's-eye --------------------------------------------------------
+    axis = figure.add_subplot(outer[2])
+    _draw_trajectories(axis, traj[None], scene.history, None, 20.0,
+                       [(f"Trion-Action ({res.lateral})", traj[None], res.colour)])
+    handles, labels = axis.get_legend_handles_labels()
+    paint_vector_map(axis, map_geoms)                 # context only; its legend is noise here
+    # Show the manoeuvre, not the resolver's 200 m horizon: the window, the stop and the
+    # plan set the range, and the lateral axis is stretched so lanes are readable.
+    top = max(res.window_m[1], summary["reach_m"], res.stop_x or 0.0, 45.0) + 15.0
+    cur = res.current_xy[(res.current_xy[:, 0] >= 0) & (res.current_xy[:, 0] <= top)]
+    axis.plot(cur[:, 1], cur[:, 0], color="0.45", linewidth=10, alpha=0.18,
+              solid_capstyle="round", zorder=0.5)
+    handles.append(mlines.Line2D([], [], color="0.45", linewidth=6, alpha=0.3))
+    labels.append("current lane corridor")
+    if res.lateral != "KEEP":
+        tgt = res.target_xy[(res.target_xy[:, 0] >= res.window_m[0]) & (res.target_xy[:, 0] <= top)]
+        axis.plot(tgt[:, 1], tgt[:, 0], color=res.colour, linewidth=12, alpha=0.28,
+                  solid_capstyle="round", zorder=0.6)
+        handles.append(mlines.Line2D([], [], color=res.colour, linewidth=7, alpha=0.45))
+        labels.append(f"target: resolver ({res.requested})")
+        markers = [(res.window_m[0], "window start")]
+        if res.stop_x is None or abs(res.stop_x - res.window_m[1]) > 1.0:
+            markers.append((res.window_m[1], "window end"))
+        for s, name in markers:
+            axis.axhline(s, color=res.colour, linestyle=(0, (4, 3)), linewidth=1.0, alpha=0.8)
+            axis.text(11.6, s, f" {name} {s:.0f} m", fontsize=7, va="bottom", ha="left",
+                      color=res.colour)
+        if res.deadline_m and res.deadline_m < top:
+            axis.axhline(res.deadline_m, color="#c0392b", linestyle=":", linewidth=1.0)
+            axis.text(11.6, res.deadline_m, f" deadline {res.deadline_m:.0f} m",
+                      fontsize=7, va="bottom", ha="left", color="#c0392b")
+    if res.stop_x is not None:
+        axis.axhline(res.stop_x, color=res.colour, linestyle="-", linewidth=1.2)
+        axis.text(11.6, res.stop_x, f" stop {res.stop_x:.0f} m", fontsize=7,
+                  va="bottom", ha="left", color=res.colour)
+    axis.set_aspect("auto")
+    axis.set_xlim(12.0, -12.0)                        # left positive, drawn on the left
+    axis.set_ylim(-12.0, top)
+    axis.set_title("Resolver corridors + Trion-Action plan  (lateral stretched)", fontsize=10)
+    axis.legend(handles, labels, loc="upper left", fontsize=7, framealpha=0.92)
+
+    figure.subplots_adjust(left=0.015, right=0.99, top=0.93, bottom=0.06)
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+
+
+def SPEED_KMH(mps: float) -> str:
+    return f"{mps * 3.6:.0f} km/h"
+
+
+def textwrap_lines(text: str, width: int = 44) -> list[str]:
+    import textwrap
+
+    return textwrap.wrap(text, width)
 
 
 def build_ui():
@@ -868,28 +915,30 @@ def build_ui():
                 api_name="run_perception_frame",
             )
 
-        with gr.Tab("Planning mock"):
+        with gr.Tab("Trion mock"):
             gr.Markdown(
-                "**No model runs on this tab.** The released Planning Expert only "
-                "understands *straight / left / right*, so a lane-change command has to be "
-                "mocked to be shown at all.\n\n"
-                f"Fixed to `{MOCK_SCENE}`: a three-lane road in singapore-queenstown with "
-                "the ego in the leftmost lane. The **thick translucent noodle** is the "
-                "navigation target, drawn along the centre of the lane the command points "
-                "at; the thin line is a hand-built future the ego might drive. "
-                "`CHANGE LANE LEFT` becomes a pull-over, because there is no lane to the "
-                "left here - only the kerb. Both are also projected onto the current camera "
-                "frames through the nuScenes calibration."
+                "**Two-system stack, mocked end to end. No neural network runs.** "
+                "A voice command goes to **Trion-Reason** (slow, symbolic: lane goal + window "
+                "+ speed preference), the **Resolver** turns the symbols into lane corridors "
+                "from the HD map and validates them, and **Trion-Action** (fast, geometric) "
+                "chooses when inside the window and draws the manoeuvre. The resolver is real "
+                "nuScenes map logic; the two systems are rule-based stand-ins for the models."
             )
-            mock_rd = gr.Radio(
-                ["ALL THREE", "GO STRAIGHT", "CHANGE LANE LEFT", "CHANGE LANE RIGHT"],
-                value="ALL THREE", label="Mocked navigation command",
-            )
-            mock_btn = gr.Button("Plan (mock)", variant="primary")
-            mock_im = gr.Image(label="Navigation targets and mocked trajectories",
-                               type="filepath")
-            mock_md = gr.Markdown()
-            mock_btn.click(mock_plan, mock_rd, [mock_im, mock_md], api_name="mock_plan")
+            with gr.Row():
+                trion_scene = gr.Dropdown(trion_scene_labels(), value=trion_scene_labels()[0],
+                                          label="Scene (multi-lane, ego in the kerb lane)", scale=3)
+                trion_pref = gr.Radio(["slower", "normal", "faster"], value="normal",
+                                      label="Speed preference", scale=1)
+            with gr.Row():
+                trion_cmd = gr.Dropdown(list(TRION_COMMANDS), value=TRION_COMMANDS[1],
+                                        label="Voice command", scale=2)
+                trion_custom = gr.Textbox(label="...or type one", placeholder="e.g. pull over and stop",
+                                          scale=3)
+            trion_btn = gr.Button("Run Trion (mock)", variant="primary")
+            trion_im = gr.Image(label="Input → Trion-Reason → Resolver → Trion-Action", type="filepath")
+            trion_md = gr.Markdown()
+            trion_btn.click(trion_run, [trion_scene, trion_cmd, trion_custom, trion_pref],
+                            [trion_im, trion_md], api_name="trion")
 
         with gr.Tab("General VQA"):
             gr.Markdown(
