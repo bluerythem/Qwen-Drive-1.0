@@ -113,7 +113,9 @@ def targets(geoms: dict, speed: float) -> dict[str, np.ndarray]:
     not a rail bolted to the front bumper, and leaving the gap keeps the ego and the start
     of its plan readable.
     """
-    reach = max(40.0, speed * HORIZON_S * 1.3)
+    # Just past where the plan ends: a target that runs far beyond it stretches the
+    # bird's-eye panel and squashes everything worth looking at.
+    reach = max(40.0, speed * HORIZON_S * 1.05)
     grid = np.linspace(0.0, reach, 160)
     lanes = lane_profiles(geoms, grid)
     if "own" not in lanes:

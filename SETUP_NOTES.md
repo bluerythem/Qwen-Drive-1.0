@@ -394,3 +394,22 @@ Two things this needed:
   before drawing and pinned back afterwards, so everything outside is simply clipped.
 - `CameraFrame.load()` does not resize, so the images are the original 1600x900 and pixel
   coordinates map straight onto the montage without scaling.
+
+
+### Layout of the mock tab
+
+The figure is three columns: a small 3x4 montage, one large current front frame, and the
+bird's-eye panel. `mock_figure()` in `app.py` builds it rather than `plot_scene_summary`,
+because **enlarging one cell of a uniform grid does not work**: giving the front row and the
+current column more room hands that room to every other cell in the same row and column, and
+their images float in the middle of it with large gaps. The first attempt produced exactly
+that. The montage stays uniform and small, and the frame worth looking at gets a column of
+its own.
+
+Rows are still views and columns still timestamps, and the montage's top row is labelled
+`t-1.5s ... t-0.0s` so the sequence reads at thumbnail size. Only the front camera's current
+frame carries the projected plan, so it is the only one enlarged.
+
+The navigation target also stops just past where the plan ends (1.05x the distance the ego
+covers, not 1.3x). Running it further stretched the bird's-eye panel to 80 m and squashed
+everything worth seeing into a sliver.

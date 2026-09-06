@@ -630,6 +630,80 @@ def mock_scene_index() -> int | None:
     return next((i for i, label in enumerate(LABELS) if label.startswith(MOCK_SCENE)), None)
 
 
+def mock_figure(path, scene, overlays, noodles, map_geoms, camera_overlays, title) -> None:
+    """Thumbnails, one large current front frame, and the bird's-eye panel.
+
+    plot_scene_summary gives every camera frame an equal cell, which is right when they are
+    all read equally. Here the front camera's current frame is the one carrying the
+    projected plan, so it gets a column of its own. Enlarging a single cell of a uniform
+    grid does not work - the other cells in its row and column inherit the extra room and
+    their images float in the middle of it - so the montage stays uniform, just small,
+    alongside. Rows are still views and columns still timestamps.
+    """
+    import matplotlib.lines as mlines
+    import matplotlib.pyplot as plt
+    from qwen_drive.visualize import _draw_trajectories, _view_label
+
+    frames = {view: [frame.load() for frame in scene.views[view]] for view in CAMERA_VIEWS}
+    columns = scene.num_camera_frames
+
+    figure = plt.figure(figsize=(21.0, 7.2))
+    outer = figure.add_gridspec(1, 3, width_ratios=[0.95, 1.8, 1.3], wspace=0.06)
+
+    montage = outer[0].subgridspec(len(CAMERA_VIEWS), columns, wspace=0.03, hspace=0.08)
+    for row, view in enumerate(CAMERA_VIEWS):
+        for column in range(columns):
+            ax = figure.add_subplot(montage[row, column])
+            ax.set_xticks([])
+            ax.set_yticks([])
+            image = frames[view][column]
+            ax.imshow(image)
+            ax.set_box_aspect(image.height / image.width)
+            if column == 0:
+                ax.set_ylabel(_view_label(view), fontsize=8, rotation=90, labelpad=4)
+            if row == 0:
+                ax.set_title(f"t-{(columns - 1 - column) * 0.5:.1f}s", fontsize=7,
+                             color="#2f3437")
+
+    hero = figure.add_subplot(outer[1])
+    hero.set_xticks([])
+    hero.set_yticks([])
+    hero.imshow(frames[CAMERA_VIEWS[0]][-1])
+    hero.set_title("Front, current frame (t-0.0s)", fontsize=10, color="#2f3437")
+    xlim, ylim = hero.get_xlim(), hero.get_ylim()
+    for item in camera_overlays.get(CAMERA_VIEWS[0], []):
+        if item["kind"] == "band":
+            hero.fill(item["uv"][:, 0], item["uv"][:, 1], color=item["colour"],
+                      alpha=item["alpha"], linewidth=0, zorder=4)
+        else:
+            hero.plot(item["uv"][:, 0], item["uv"][:, 1], color=item["colour"],
+                      linewidth=item["width"] * 1.6, alpha=item["alpha"],
+                      solid_capstyle="round", zorder=5)
+    hero.set_xlim(xlim)
+    hero.set_ylim(ylim)
+
+    axis = figure.add_subplot(outer[2])
+    _draw_trajectories(axis, overlays[0][1], scene.history, None, 20.0, overlays)
+    axis.set_title(title, fontsize=10)
+    handles, labels = axis.get_legend_handles_labels()
+    extra_handles, extra_labels = paint_vector_map(axis, map_geoms)
+    for handle, label in zip(extra_handles, extra_labels):
+        if label not in set(labels):
+            handles.append(handle)
+            labels.append(label)
+    for label, polyline, colour in noodles or []:
+        axis.plot(polyline[:, 1], polyline[:, 0], color=colour, linewidth=13, alpha=0.28,
+                  solid_capstyle="round", zorder=0.6)
+        handles.append(mlines.Line2D([], [], color=colour, linewidth=7, alpha=0.45))
+        labels.append(label)
+    axis.legend(handles, labels, loc="lower left", fontsize=7, framealpha=0.92)
+    _floor_longitudinal_span(figure)
+
+    figure.subplots_adjust(left=0.03, right=0.99, top=0.92, bottom=0.06)
+    figure.savefig(path, dpi=150)
+    plt.close(figure)
+
+
 def mock_plan(command, progress=gr.Progress()):
     from mock_planning import COMMAND_COLOURS, COMMANDS, targets, trajectory
 
@@ -678,12 +752,8 @@ def mock_plan(command, progress=gr.Progress()):
 
     OUT.mkdir(parents=True, exist_ok=True)
     out_path = OUT / f"mock_{command.replace(' ', '_').lower()}.png"
-    save_plan_figure(
-        out_path, map_geoms=drawn, noodles=noodles, camera_overlays=camera_overlays,
-        scene=sample.scene,
-        trajectories=overlays[0][1], history=sample.scene.history, ground_truth=None,
-        reasoning=None, title=f"{MOCK_SCENE} - mocked plans, no model", overlays=overlays,
-    )
+    mock_figure(out_path, sample.scene, overlays, noodles, drawn, camera_overlays,
+                title=f"{MOCK_SCENE} - mocked plans, no model")
     table = ("| command | reach (m) | end y (m) | lateral move (m) |\n|---|---|---|---|\n"
              + "\n".join(rows))
     note = (f"Ego at **{speed:.1f} m/s** in the leftmost lane, two crossable lanes to its "
