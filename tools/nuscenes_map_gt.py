@@ -111,7 +111,8 @@ class NuScenesMapGT:
         masks = nmap.get_map_mask(patch, yaw, LAYERS, canvas_size=CANVAS)
         return {name: mask.astype(bool) for name, mask in zip(LAYERS, masks)}
 
-    def vector(self, sample_token: str, centreline_spacing: float = 1.0) -> dict:
+    def vector(self, sample_token: str, centreline_spacing: float = 1.0,
+               half_length: float | None = None, half_width: float | None = None) -> dict:
         """Ego-frame vector geometry for the patch, plus discretized lane centrelines.
 
         Polygon layers come back as ``{exterior, holes}``; line layers and centrelines as
@@ -119,21 +120,27 @@ class NuScenesMapGT:
         """
         x, y, yaw = self.pose[sample_token]
         nmap = self.map(self.location[sample_token])
-        patch = (x, y, MAP_YBOUND[1] - MAP_YBOUND[0], MAP_XBOUND[1] - MAP_XBOUND[0])
+        length = 2 * (half_length if half_length is not None else MAP_XBOUND[1])
+        width = 2 * (half_width if half_width is not None else MAP_YBOUND[1])
+        patch = (x, y, width, length)
 
         out: dict[str, list] = {}
         for name, geoms in nmap.get_map_geom(patch, yaw, POLYGON_LAYERS + LINE_LAYERS):
             collect = _rings if name in POLYGON_LAYERS else _polylines
             out.setdefault(name, []).extend(item for g in geoms for item in collect(g))
-        out["lane_centreline"] = self._centrelines(nmap, x, y, yaw, centreline_spacing)
+        out["lane_centreline"] = self._centrelines(
+            nmap, x, y, yaw, centreline_spacing, length / 2, width / 2)
         return out
 
-    def _centrelines(self, nmap, x, y, yaw_deg, spacing) -> list[np.ndarray]:
+    def _centrelines(self, nmap, x, y, yaw_deg, spacing,
+                     half_length=None, half_width=None) -> list[np.ndarray]:
         """Lane centrelines from arcline_path_3, clipped to the patch.
 
         These are global poses, unlike get_map_geom's output, so they are rotated here.
         """
-        reach = float(np.hypot(MAP_XBOUND[1], MAP_YBOUND[1])) + 5.0
+        half_length = half_length if half_length is not None else MAP_XBOUND[1]
+        half_width = half_width if half_width is not None else MAP_YBOUND[1]
+        reach = float(np.hypot(half_length, half_width)) + 5.0
         records = nmap.get_records_in_patch(
             (x - reach, y - reach, x + reach, y + reach), ["lane", "lane_connector"], mode="intersect"
         )
@@ -148,7 +155,7 @@ class NuScenesMapGT:
             if len(poses) < 2:
                 continue
             local = (np.asarray(poses)[:, :2] - (x, y)) @ rotation.T
-            inside = (np.abs(local[:, 0]) <= -MAP_XBOUND[0]) & (np.abs(local[:, 1]) <= -MAP_YBOUND[0])
+            inside = (np.abs(local[:, 0]) <= half_length) & (np.abs(local[:, 1]) <= half_width)
             # A lane can leave and re-enter the patch, so keep each run separately.
             for start, stop in _runs(inside):
                 if stop - start > 1:

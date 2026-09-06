@@ -325,3 +325,40 @@ junction scenes; it is gated on `multi_lane` now.
 A stationary ego also collapsed the trajectory panel to a flat line, since every point sits at
 x ~ 0 and the equal aspect ratio squashes it. `_floor_longitudinal_span` gives the panel a
 20 m minimum so the stopped scenes render.
+
+
+## The "Planning mock" tab
+
+**No model runs on this tab.** The released Planning Expert's command vocabulary is only
+straight / left / right - there is no lane-change command to give it - so showing what one
+would look like means mocking both halves of the interface.
+
+Fixed to `nuscenes 147`: a three-lane road in singapore-queenstown, ego at 11.9 m/s in the
+leftmost lane with two `DOUBLE_DASHED_WHITE` lanes to its right. Three mocked commands, and
+`ALL THREE` overlays them:
+
+| command | mocked future | reach | lateral move |
+| --- | --- | --- | --- |
+| GO STRAIGHT | hold the lane | 59.7 m | -0.13 m |
+| CHANGE LANE RIGHT | smoothstep across to the right lane centre | 59.7 m | -3.38 m |
+| CHANGE LANE LEFT | pull over to the kerb and stop | 29.8 m | +0.51 m |
+
+`CHANGE LANE LEFT` becomes a pull-over because there is no lane to the ego's left here, only
+the kerb, and it decelerates to a stop - which is why it reaches half as far. The lateral
+move is small because the ego is already in the leftmost lane; the stop is what makes the
+manoeuvre read.
+
+`tools/mock_planning.py` builds both the navigation target (the thick translucent noodle,
+drawn along the centre of the lane the command points at) and the trajectory, from the map
+alone. Lateral moves use a smoothstep so there is no kink, and headings come from the
+gradient, so the output has the same `[50, 3]` shape as the model's and is drawn by the same
+code.
+
+Two fixes came out of building it:
+
+- The **left kerb** cannot be found by interpolating the drivable-area ring: a polygon wraps
+  around, so its points are neither sorted in x nor single-valued in y. It is now the
+  *nearest* boundary point above the ego at each x.
+- The drivable polygon is **clipped to the patch**, and the cut runs along the patch border,
+  so drawing the boundary as a road edge painted one straight across the road 30 m ahead of
+  the ego. Boundary runs that lie on the patch border are now skipped.

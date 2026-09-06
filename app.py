@@ -411,6 +411,23 @@ def draw_vector_map(axis) -> list:
             ("road_divider", rgb[3], "solid", "road divider")]
 
 
+def _inside_patch(loop, margin: float = 0.4):
+    """Split a clipped ring into the runs that are genuinely inside the patch.
+
+    MAP_EXTENT is (left, right, bottom, top) in plot coordinates, so the patch spans
+    +/-15 m laterally and +/-30 m longitudinally; points sitting on that box are the cut,
+    not real geometry.
+    """
+    half_lateral = abs(MAP_EXTENT[0]) - margin
+    half_longitudinal = abs(MAP_EXTENT[2]) - margin
+    inside = ((np.abs(loop[:, 0]) < half_longitudinal)
+              & (np.abs(loop[:, 1]) < half_lateral))
+    padded = np.concatenate([[False], inside, [False]])
+    edges = np.flatnonzero(padded[1:] != padded[:-1])
+    return [loop[start:stop] for start, stop in zip(edges[::2], edges[1::2])
+            if stop - start > 1]
+
+
 def paint_vector_map(axis, geoms) -> tuple[list, list]:
     """Draw the vector map under the trajectories. Returns extra legend handles/labels."""
     import matplotlib.lines as mlines
@@ -443,11 +460,14 @@ def paint_vector_map(axis, geoms) -> tuple[list, list]:
             handles.append(mlines.Line2D([], [], color=colour, linestyle=style, linewidth=width))
         labels.append(label)
 
-    # nuScenes has no road-edge layer, so the drivable boundary stands in for one.
+    # nuScenes has no road-edge layer, so the drivable boundary stands in for one. The
+    # polygon was clipped to the patch, though, and the cut runs along the patch border -
+    # drawing that would put a road edge straight across the road ahead of the ego.
     edge = tuple(v / 255 for v in MAP_PALETTE[3])
     for ring in geoms.get("drivable_area") or []:
         for loop in [ring["exterior"], *ring["holes"]]:
-            axis.plot(loop[:, 1], loop[:, 0], color=edge, linewidth=1.6, zorder=1)
+            for piece in _inside_patch(loop):
+                axis.plot(piece[:, 1], piece[:, 0], color=edge, linewidth=1.6, zorder=1)
     if geoms.get("drivable_area"):
         handles.append(mlines.Line2D([], [], color=edge, linewidth=1.6))
         labels.append("road edge (drivable boundary)")
@@ -467,10 +487,11 @@ def _floor_longitudinal_span(figure, minimum: float = 20.0) -> None:
         axis.set_ylim(centre - minimum / 2, centre + minimum / 2)
 
 
-def save_plan_figure(path, map_grid=None, map_geoms=None, **kwargs) -> None:
+def save_plan_figure(path, map_grid=None, map_geoms=None, noodles=None, **kwargs) -> None:
     """plot_scene_summary, optionally with a BEV map drawn underneath.
 
-    ``map_grid`` paints a raster, ``map_geoms`` draws vector geometry.
+    ``map_grid`` paints a raster, ``map_geoms`` draws vector geometry, and ``noodles`` are
+    thick translucent polylines drawn under the trajectories, for navigation targets.
     """
     import matplotlib.patches as patches
     import matplotlib.pyplot as plt
@@ -508,6 +529,21 @@ def save_plan_figure(path, map_grid=None, map_geoms=None, **kwargs) -> None:
             labels.append(MAP_CLASS_NAMES[int(index)].replace("_", " "))
         # Ahead of the ego is the part worth seeing, so the bigger legend goes behind it.
         axis.legend(handles, labels, loc="lower left", fontsize=7, framealpha=0.92)
+
+    if noodles:
+        import matplotlib.lines as mlines
+
+        axis = figure.axes[-1]
+        handles, labels = axis.get_legend_handles_labels()
+        for label, polyline, colour in noodles:
+            axis.plot(polyline[:, 1], polyline[:, 0], color=colour, linewidth=13,
+                      alpha=0.30, solid_capstyle="round", solid_joinstyle="round",
+                      zorder=0.6)
+            handles.append(mlines.Line2D([], [], color=colour, linewidth=7, alpha=0.45))
+            labels.append(label)
+        axis.legend(handles, labels, loc="lower left", fontsize=7, framealpha=0.92)
+
+    _floor_longitudinal_span(figure)
     figure.savefig(path, dpi=150)
     plt.close(figure)
 
@@ -531,6 +567,63 @@ def run_perception_frame(token, score_thr, progress=gr.Progress()):
         f"`{result['occ'].shape}` &nbsp;·&nbsp; map `{result['map'].shape}`"
     )
     return summary, info
+
+
+# ---------------------------------------------------------------------------
+# Planning mock: no model runs here. The trajectories are hand-built from the map so the
+# interface can be shown with a lane-change command, which the released planner has no
+# vocabulary for - its commands are only straight, left and right.
+# ---------------------------------------------------------------------------
+
+MOCK_SCENE = "nuscenes 147"
+
+
+def mock_scene_index() -> int | None:
+    return next((i for i, label in enumerate(LABELS) if label.startswith(MOCK_SCENE)), None)
+
+
+def mock_plan(command, progress=gr.Progress()):
+    from mock_planning import COMMAND_COLOURS, COMMANDS, targets, trajectory
+
+    index = mock_scene_index()
+    if index is None:
+        return None, f"{MOCK_SCENE} is not loaded; build data/nuscenes_scenes.jsonl first."
+    sample = SAMPLES[index]
+    token = sample.scene.metadata.get("token", "")
+    speed = sample.initial_speed
+
+    helper = _map_helper()
+    if helper is None or token not in helper.pose:
+        return None, "needs the nuScenes map expansion in data/nuscenes/maps/expansion/"
+
+    progress(0.3, desc="reading the map")
+    # A wide patch for the geometry the mock follows, the standard one for what is drawn.
+    geometry = helper.vector(token, half_length=70.0, half_width=25.0)
+    drawn = helper.vector(token)
+    wanted = list(COMMANDS) if command == "ALL THREE" else [command]
+    goals = targets(geometry, speed)
+
+    overlays, noodles, rows = [], [], []
+    for name in wanted:
+        path = trajectory(name, geometry, speed)
+        overlays.append((f"{name}", path[None], COMMAND_COLOURS[name]))
+        if name in goals:
+            noodles.append((f"{name} target", goals[name], COMMAND_COLOURS[name]))
+        rows.append(f"| {name} | {path[-1, 0]:.1f} | {path[-1, 1]:+.2f} | "
+                    f"{path[-1, 1] - path[0, 1]:+.2f} |")
+
+    OUT.mkdir(parents=True, exist_ok=True)
+    out_path = OUT / f"mock_{command.replace(' ', '_').lower()}.png"
+    save_plan_figure(
+        out_path, map_geoms=drawn, noodles=noodles, scene=sample.scene,
+        trajectories=overlays[0][1], history=sample.scene.history, ground_truth=None,
+        reasoning=None, title=f"{MOCK_SCENE} - mocked plans, no model", overlays=overlays,
+    )
+    table = ("| command | reach (m) | end y (m) | lateral move (m) |\n|---|---|---|---|\n"
+             + "\n".join(rows))
+    note = (f"Ego at **{speed:.1f} m/s** in the leftmost lane, two crossable lanes to its "
+            f"right. The pull-over decelerates to a stop, which is why it reaches less far.")
+    return str(out_path), f"{table}\n\n{note}"
 
 
 def build_ui():
@@ -639,6 +732,28 @@ def build_ui():
                 run_perception_frame, [frame_dd, thr_sl], [pf_vis, pf_info],
                 api_name="run_perception_frame",
             )
+
+        with gr.Tab("Planning mock"):
+            gr.Markdown(
+                "**No model runs on this tab.** The released Planning Expert only "
+                "understands *straight / left / right*, so a lane-change command has to be "
+                "mocked to be shown at all.\n\n"
+                f"Fixed to `{MOCK_SCENE}`: a three-lane road in singapore-queenstown with "
+                "the ego in the leftmost lane. The **thick translucent noodle** is the "
+                "navigation target, drawn along the centre of the lane the command points "
+                "at; the thin line is a hand-built future the ego might drive. "
+                "`CHANGE LANE LEFT` becomes a pull-over, because there is no lane to the "
+                "left here - only the kerb."
+            )
+            mock_rd = gr.Radio(
+                ["ALL THREE", "GO STRAIGHT", "CHANGE LANE LEFT", "CHANGE LANE RIGHT"],
+                value="ALL THREE", label="Mocked navigation command",
+            )
+            mock_btn = gr.Button("Plan (mock)", variant="primary")
+            mock_im = gr.Image(label="Navigation targets and mocked trajectories",
+                               type="filepath")
+            mock_md = gr.Markdown()
+            mock_btn.click(mock_plan, mock_rd, [mock_im, mock_md], api_name="mock_plan")
 
         with gr.Tab("General VQA"):
             gr.Markdown(
