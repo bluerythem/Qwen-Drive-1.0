@@ -31,8 +31,8 @@ FRAME_OFFSETS = (-1.5, -1.0, -0.5, 0.0)
 CURRENT_PIXELS, HISTORY_PIXELS = 921600, 174080
 
 
-def load(root: Path, name: str) -> list[dict]:
-    return json.loads((root / "v1.0-mini" / f"{name}.json").read_text())
+def load(root: Path, name: str, version: str = "v1.0-mini") -> list[dict]:
+    return json.loads((root / version / f"{name}.json").read_text())
 
 
 def quat_to_matrix(q) -> np.ndarray:
@@ -61,12 +61,12 @@ def resized_size(width: int, height: int, budget: int) -> tuple[int, int]:
 class Mini:
     """The bits of the nuScenes tables this conversion needs."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, version: str = "v1.0-mini", keep: set[str] | None = None):
         self.root = root
-        self.scenes = load(root, "scene")
-        self.samples = {s["token"]: s for s in load(root, "sample")}
-        self.ego_pose = {e["token"]: e for e in load(root, "ego_pose")}
-        self.sample_data = load(root, "sample_data")
+        self.scenes = [s for s in load(root, "scene", version) if keep is None or s["name"] in keep]
+        self.samples = {s["token"]: s for s in load(root, "sample", version)}
+        self.ego_pose = {e["token"]: e for e in load(root, "ego_pose", version)}
+        self.sample_data = load(root, "sample_data", version)
 
         self.keyframe_images: dict[tuple[str, str], dict] = {}
         by_scene_lidar: dict[str, list[dict]] = defaultdict(list)
@@ -214,9 +214,21 @@ def main() -> None:
     parser.add_argument("--turn-threshold", type=float, default=0.35,
                         help="radians of heading change over 5 s that counts as a turn")
     parser.add_argument("--stride", type=int, default=1, help="keep every Nth usable sample")
+    parser.add_argument("--version", default="v1.0-mini")
+    parser.add_argument("--only-scenes", default=None,
+                        help="comma-separated scene names, or a JSON file with a 'scene' field "
+                             "per record (e.g. data/lane_changes_val.json)")
     args = parser.parse_args()
 
-    mini = Mini(args.root)
+    keep = None
+    if args.only_scenes:
+        source = Path(args.only_scenes)
+        if source.exists():
+            keep = {r["scene"] for r in json.loads(source.read_text())}
+        else:
+            keep = {name.strip() for name in args.only_scenes.split(",")}
+        print(f"restricting to {len(keep)} scenes")
+    mini = Mini(args.root, args.version, keep)
     records, counts = [], defaultdict(int)
     for scene in mini.scenes:
         chain = mini.sample_chain(scene)

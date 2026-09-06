@@ -107,8 +107,19 @@ def load_scenes(args):
                                      num_history_points=16))
         for index, sample in enumerate(found):
             turn = turns[sample.scene.nav_command]
-            # tools/nuscenes_lane_change.py writes this; absent until that has been run.
-            mark = ", LANE CHANGE" if sample.scene.metadata.get("lane_change") else ""
+            meta = sample.scene.metadata
+            marks = []
+            if meta.get("lane_change"):                      # tools/nuscenes_lane_change.py
+                marks.append("LANE CHANGE")
+            # multi_lane already excludes junctions: a lane beside a junction path is not
+            # somewhere the ego can move to, so the raw counts must not be advertised there.
+            if meta.get("multi_lane"):                       # tools/nuscenes_multilane.py
+                left, right = meta.get("lanes_left", 0), meta.get("lanes_right", 0)
+                room = "".join(f"{n}{side}" for n, side in ((left, "L"), (right, "R")) if n)
+                marks.append(f"{left + right + 1} lanes, room {room}")
+            elif meta.get("in_junction"):
+                marks.append("junction")
+            mark = (", " + ", ".join(marks)) if marks else ""
             labels.append(
                 f"nuscenes {index:03d} - {turn}, {sample.initial_speed:.1f} m/s{mark}"
             )
@@ -441,6 +452,19 @@ def paint_vector_map(axis, geoms) -> tuple[list, list]:
         handles.append(mlines.Line2D([], [], color=edge, linewidth=1.6))
         labels.append("road edge (drivable boundary)")
     return handles, labels
+
+
+def _floor_longitudinal_span(figure, minimum: float = 20.0) -> None:
+    """Keep the trajectory panel readable when the ego is stopped.
+
+    A stationary scene has every point at x ~ 0, so the automatic limits collapse to a
+    sliver and the equal aspect ratio squashes the panel into a line.
+    """
+    axis = figure.axes[-1]
+    low, high = axis.get_ylim()
+    if high - low < minimum:
+        centre = 0.5 * (low + high)
+        axis.set_ylim(centre - minimum / 2, centre + minimum / 2)
 
 
 def save_plan_figure(path, map_grid=None, map_geoms=None, **kwargs) -> None:

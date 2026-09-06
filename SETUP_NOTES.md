@@ -290,3 +290,38 @@ example: -2.3 m of lateral movement with under 0.08 rad of heading change.
 Building runnable scenes from these needs the image blobs, which is the 350 GB download.
 `data/lane_changes_val.json` records every hit with its `sample_token`, so the scene builder
 can be pointed straight at them once images are present.
+
+
+## Where could the ego change lane? (mini)
+
+`tools/nuscenes_multilane.py` probes sideways from the ego pose, snaps each probe to a lane,
+and keeps only lanes whose heading agrees with the ego's - an oncoming lane across a centre
+line is not somewhere you can move to. It also reports the marking type, so
+`DOUBLE_DASHED_WHITE` (crossable) is distinguishable from `DOUBLE_SOLID_WHITE`.
+
+    python tools/nuscenes_multilane.py --scenes data/nuscenes_scenes.jsonl
+
+The dropdown label then carries the road width, e.g.
+`nuscenes 199 - straight, 14.3 m/s, 3 lanes, room 2R`, or `junction`.
+
+Of 255 scenes: **117 have the ego inside a junction**, and of the 138 on a real lane, **80
+have an adjacent same-direction lane**. Only **26 have room on both sides**, and every one of
+those is stationary.
+
+| what | scenes | note |
+| --- | --- | --- |
+| widest while moving | idx 186-204 | 3-lane road, ego in the **left** lane, **2 lanes to its right**, 12-15 m/s, all `DOUBLE_DASHED_WHITE` |
+| true middle lane (room 1L1R) | idx 49-74 | 3 lanes, but **stopped at a red light** in Boston, 0.0 m/s |
+
+There is no scene in mini where the ego is *driving* with a lane on each side. Singapore is
+left-hand traffic, so on idx 186-204 the two lanes to the right are the overtaking side.
+
+Two corrections were needed to get here. Counting `lane_connector` records as neighbours made
+every junction look multi-lane - they were 61% of all hits - so only `lane` records count now,
+and scenes with the ego inside a junction are excluded. The dropdown label was then briefly
+built from the raw counts rather than from `multi_lane`, which advertised "room" for 11
+junction scenes; it is gated on `multi_lane` now.
+
+A stationary ego also collapsed the trajectory panel to a flat line, since every point sits at
+x ~ 0 and the equal aspect ratio squashes it. `_floor_longitudinal_span` gives the panel a
+20 m minimum so the stopped scenes render.

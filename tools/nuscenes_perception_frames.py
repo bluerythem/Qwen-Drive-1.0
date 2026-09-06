@@ -52,9 +52,10 @@ def main() -> None:
     parser.add_argument("--scenes", type=Path, default=Path("data/nuscenes_scenes.jsonl"),
                         help="only pack the samples this scene file uses")
     parser.add_argument("--output", type=Path, default=Path("data/nuscenes_perception"))
+    parser.add_argument("--version", default="v1.0-mini")
     args = parser.parse_args()
 
-    meta = args.root / "v1.0-mini"
+    meta = args.root / args.version
     sample_data = json.loads((meta / "sample_data.json").read_text())
     calibrated = {c["token"]: c for c in json.loads((meta / "calibrated_sensor.json").read_text())}
 
