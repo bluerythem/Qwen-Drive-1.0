@@ -145,8 +145,19 @@ what the perception-frame tab is forced to assume:
 ### Overlaying a BEV map under the trajectory
 
 The Planning tab has a **"Map under the trajectory"** choice: `none`, `predicted` (the BEV
-head on the same keyframe) or `ground truth` (the nuScenes map expansion, rasterized by
-`tools/nuscenes_map_gt.py`). Both are nuScenes-only.
+head on the same keyframe), `ground truth (vector)` or `ground truth (raster)`. All the map
+options are nuScenes-only.
+
+The nuScenes map expansion is a **vector** map - polygons, polylines and a lane graph - so
+`ground truth (vector)` draws it as geometry rather than pixels: filled polygons for
+drivable surface, walkway and crosswalks, dashed lane dividers, the drivable-area boundary
+as a road edge, and lane centrelines discretized from `arcline_path_3` at 1 m. Interior
+rings are punched as real holes via a single `matplotlib.path.Path` per polygon. It is
+sharper than the raster and shows lane structure the 0.15 m grid cannot.
+
+`get_map_geom` clips each record to the patch and returns it already rotated into the ego
+frame (X forward, Y left), so only the lane centrelines need transforming by hand - those
+come back as global poses.
 
 No transform is involved: `docs/perception.md` says the map raster is indexed in ego
 coordinates with X forward and Y left, which is exactly the frame the trajectories use, so

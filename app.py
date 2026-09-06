@@ -132,7 +132,7 @@ def plan(scene_label, nav_label, mode_label, planner_name, num_samples, seed, ma
     commands = [0, 1, 2] if compare_all else [NAV_COMMANDS.index(nav_label)]
 
     results = {}
-    map_grid, map_note = None, ""
+    map_grid, map_geoms, map_note = None, None, ""
     with lock:
         if map_choice == "predicted":
             frame_dir = NS_PERCEPTION_DIR / sample.token
@@ -146,13 +146,21 @@ def plan(scene_label, nav_label, mode_label, planner_name, num_samples, seed, ma
                     "Only the nuScenes scenes have one, because the BEV head needs the full "
                     "camera ring and calibration, which the WOD-E2E demo scenes do not carry."
                 )
-        elif map_choice == "ground truth":
-            progress(0.05, desc="rasterizing the nuScenes map")
-            map_grid = ground_truth_map(sample.token)
-            if map_grid is not None:
+        elif map_choice.startswith("ground truth"):
+            as_vector = "vector" in map_choice
+            progress(0.05, desc="reading the nuScenes map")
+            if as_vector:
+                map_geoms = vector_map(sample.token)
+                found = map_geoms is not None
+            else:
+                map_grid = ground_truth_map(sample.token)
+                found = map_grid is not None
+            if found:
+                form = "vector geometry" if as_vector else "raster"
                 map_note = (
-                    "\n\nUnder the trajectory: the **ground-truth** map from the nuScenes map "
-                    "expansion (road edge = drivable-area boundary; road line = lane + road dividers)."
+                    f"\n\nUnder the trajectory: the **ground-truth** map from the nuScenes map "
+                    f"expansion, as {form}. nuScenes has no road-edge layer, so that is the "
+                    f"drivable-area boundary."
                 )
             else:
                 map_note = (
@@ -180,7 +188,7 @@ def plan(scene_label, nav_label, mode_label, planner_name, num_samples, seed, ma
         ]
         scene = results[recorded if recorded in results else commands[0]][0]
         save_plan_figure(
-            path, map_grid=map_grid, scene=scene,
+            path, map_grid=map_grid, map_geoms=map_geoms, scene=scene,
             trajectories=results[commands[0]][1].trajectories,
             history=scene.history, ground_truth=gt, reasoning=None,
             title=f"{sample.token} ({mode.value})\nall navigation commands",
@@ -218,7 +226,8 @@ def plan(scene_label, nav_label, mode_label, planner_name, num_samples, seed, ma
     scene, result = results[nav]
     path = OUT / f"plan_{index}_{nav}.png"
     save_plan_figure(
-        path, map_grid=map_grid, scene=scene, trajectories=result.trajectories,
+        path, map_grid=map_grid, map_geoms=map_geoms, scene=scene,
+        trajectories=result.trajectories,
         history=scene.history, ground_truth=gt, reasoning=result.reasoning,
         title=f"{sample.token} ({mode.value})",
     )
@@ -341,14 +350,19 @@ def map_raster_rgb(grid: np.ndarray) -> np.ndarray:
     return palette[labels].transpose(1, 0, 2)[::-1, ::-1]
 
 
-def ground_truth_map(token: str):
-    """The nuScenes map-expansion raster for a keyframe, or None if unavailable."""
+def _map_helper():
+    """The NuScenesMapGT wrapper, built on first use, or None without the expansion pack."""
     if "helper" not in gt_map:
         from nuscenes_map_gt import NuScenesMapGT
 
         helper = NuScenesMapGT(ROOT / "data" / "nuscenes")
         gt_map["helper"] = helper if helper.available() else None
-    helper = gt_map["helper"]
+    return gt_map["helper"]
+
+
+def ground_truth_map(token: str):
+    """The nuScenes map-expansion raster for a keyframe, or None if unavailable."""
+    helper = _map_helper()
     if helper is None or token not in helper.pose:
         return None
     key = f"gt:{token}"
@@ -357,12 +371,96 @@ def ground_truth_map(token: str):
     return perception_cache[key]
 
 
-def save_plan_figure(path, map_grid=None, **kwargs) -> None:
-    """plot_scene_summary, optionally with the predicted BEV map drawn underneath."""
+def vector_map(token: str):
+    """Ego-frame vector geometry for a keyframe, or None if unavailable."""
+    helper = _map_helper()
+    if helper is None or token not in helper.pose:
+        return None
+    key = f"vec:{token}"
+    if key not in perception_cache:
+        perception_cache[key] = helper.vector(token)
+    return perception_cache[key]
+
+
+def draw_vector_map(axis) -> list:
+    """Return the (drawer, colour, label) plan for the vector map, painted back to front."""
+    from qwen_drive_perception.configuration_perception import MAP_PALETTE
+
+    rgb = [tuple(v / 255 for v in c) for c in MAP_PALETTE]
+    #                layer            colour        kind     label
+    return [("drivable_area", rgb[1], "fill", "driveable surface"),
+            ("walkway", rgb[5], "fill", "walkway"),
+            ("ped_crossing", rgb[4], "fill", "crosswalk"),
+            ("lane_centreline", (0.45, 0.45, 0.45), "dotted", "lane centreline"),
+            ("lane_divider", rgb[2], "dashed", "lane divider"),
+            ("road_divider", rgb[3], "solid", "road divider")]
+
+
+def paint_vector_map(axis, geoms) -> tuple[list, list]:
+    """Draw the vector map under the trajectories. Returns extra legend handles/labels."""
+    import matplotlib.lines as mlines
+    import matplotlib.patches as patches
+    from matplotlib.path import Path as MplPath
+    from qwen_drive_perception.configuration_perception import MAP_PALETTE
+
+    handles, labels = [], []
+    for layer, colour, kind, label in draw_vector_map(axis):
+        items = geoms.get(layer) or []
+        if not items:
+            continue
+        if kind == "fill":
+            for ring in items:
+                # Build one path per polygon so interior rings punch real holes.
+                vertices, codes = [], []
+                for loop in [ring["exterior"], *ring["holes"]]:
+                    vertices.extend(loop[:, ::-1])          # (x fwd, y left) -> (plot x, y)
+                    codes.extend([MplPath.MOVETO] + [MplPath.LINETO] * (len(loop) - 2)
+                                 + [MplPath.CLOSEPOLY])
+                axis.add_patch(patches.PathPatch(
+                    MplPath(vertices, codes), facecolor=colour, edgecolor="none", zorder=0))
+            handles.append(patches.Patch(color=colour))
+        else:
+            style = {"solid": "-", "dashed": (0, (6, 4)), "dotted": (0, (1, 3))}[kind]
+            width = 0.8 if kind == "dotted" else 1.4
+            for line in items:
+                axis.plot(line[:, 1], line[:, 0], color=colour, linestyle=style,
+                          linewidth=width, zorder=1, alpha=0.9)
+            handles.append(mlines.Line2D([], [], color=colour, linestyle=style, linewidth=width))
+        labels.append(label)
+
+    # nuScenes has no road-edge layer, so the drivable boundary stands in for one.
+    edge = tuple(v / 255 for v in MAP_PALETTE[3])
+    for ring in geoms.get("drivable_area") or []:
+        for loop in [ring["exterior"], *ring["holes"]]:
+            axis.plot(loop[:, 1], loop[:, 0], color=edge, linewidth=1.6, zorder=1)
+    if geoms.get("drivable_area"):
+        handles.append(mlines.Line2D([], [], color=edge, linewidth=1.6))
+        labels.append("road edge (drivable boundary)")
+    return handles, labels
+
+
+def save_plan_figure(path, map_grid=None, map_geoms=None, **kwargs) -> None:
+    """plot_scene_summary, optionally with a BEV map drawn underneath.
+
+    ``map_grid`` paints a raster, ``map_geoms`` draws vector geometry.
+    """
     import matplotlib.patches as patches
     import matplotlib.pyplot as plt
 
     figure = plot_scene_summary(output=None, **kwargs)
+    if map_geoms is not None:
+        axis = figure.axes[-1]
+        xlim, ylim = axis.get_xlim(), axis.get_ylim()
+        extra_handles, extra_labels = paint_vector_map(axis, map_geoms)
+        axis.set_xlim(xlim)
+        axis.set_ylim(ylim)
+        handles, labels = axis.get_legend_handles_labels()
+        seen = set(labels)
+        for handle, label in zip(extra_handles, extra_labels):
+            if label not in seen:
+                handles.append(handle)
+                labels.append(label)
+        axis.legend(handles, labels, loc="lower left", fontsize=7, framealpha=0.92)
     if map_grid is not None:
         axis = figure.axes[-1]                       # the trajectory panel is added last
         xlim, ylim = axis.get_xlim(), axis.get_ylim()
@@ -448,11 +546,12 @@ def build_ui():
                 samples_sl = gr.Slider(1, 12, value=6, step=1, label="Trajectories to sample")
                 seed_nb = gr.Number(value=42, precision=0, label="Noise seed")
             map_rd = gr.Radio(
-                ["none", "predicted", "ground truth"],
+                ["none", "predicted", "ground truth (vector)", "ground truth (raster)"],
                 value="none",
                 label="Map under the trajectory",
                 info="nuScenes scenes only. predicted = BEV head on the same keyframe; "
-                     "ground truth = nuScenes map expansion",
+                     "ground truth = nuScenes map expansion, drawn as vector geometry "
+                     "(with lane centrelines) or as the rasterized grid",
             )
             plan_btn = gr.Button("Plan", variant="primary")
             plot_im = gr.Image(label="Camera ring and predicted trajectories", type="filepath")
