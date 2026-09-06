@@ -364,6 +364,20 @@ What the four canned commands show on `nuscenes 147` (ego 11.9 m/s, kerb lane of
 | pull over | kerb boundary 2.2 m left; stop at 28 m (2.5 m/s^2 from 11.9 m/s) | drives PULL_OVER, +1.3 m, rests at 0 m/s |
 | keep going | localized, nothing else to check | KEEP, accelerates to the 50 km/h cap |
 
+Every line on the figure carries a provenance tag, and a key sits in the footer:
+
+| tag | meaning | examples |
+| --- | --- | --- |
+| `in` | input the system receives | scene, ego speed, the voice command, history, ego marker |
+| `msg` | field of a real inter-system message | everything Trion-Reason emits; every resolver check, corridor, window, cap and stop |
+| `out` | real output of the system | the 50 x 3 trajectory, on the camera and the map |
+| `viz` | derived from the output for display only | reach, lateral vs own lane, end speed - all computed from the trajectory |
+| `mock` | exists only in this mock | "commits at N m": a fixed 35% into the window, which a real planner does not emit unless given a head for it |
+
+The distinction matters for the room: the pictures on the right are what production would
+look like - a real trajectory rendered two ways - and the summary numbers are honest
+derivations, except the one red line.
+
 Assumptions worth saying out loud in the room: the speed limit is **assumed** 50 km/h -
 nuScenes' map has none; "commits at" is a fixed fraction of the window, not a gap model; and
 `lateral` is measured against the current lane's centreline, so following a curving lane

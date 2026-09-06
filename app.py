@@ -672,25 +672,46 @@ def trion_run(scene_label, command_choice, custom_command, preference, progress=
         + f"  \n_{msg.why}_",
         f"**Resolver** → {verdict} &nbsp;`{ok}`  \n"
         + "  \n".join(f"{'✓' if ok else '✗'} {name} — {note}" for name, ok, note in resolved.checks),
-        f"**Trion-Action** → drives `{resolved.lateral}`: reaches {summary['reach_m']:.0f} m in 5 s, "
-        f"lateral {summary['lateral_move_m']:+.1f} m, ends at {summary['final_speed']:.1f} m/s "
-        f"(cap {resolved.speed_cap:.1f})"
-        + (f", commits to the change at {summary['commit_at_m']:.0f} m" if summary["commit_at_m"] else ""),
+        f"**Trion-Action** → drives `{resolved.lateral}`. Real output: a 50×3 trajectory (5 s @ 10 Hz). "
+        f"Derived for display: reaches {summary['reach_m']:.0f} m, lateral {summary['lateral_move_m']:+.1f} m vs own lane, "
+        f"ends at {summary['final_speed']:.1f} m/s (cap {resolved.speed_cap:.1f} is a resolver input)"
+        + (f". *Mock only:* commits at {summary['commit_at_m']:.0f} m — a fixed 35 % into the window, "
+           f"not something a real planner emits unless given a head for it" if summary["commit_at_m"] else ""),
+        "_Tags on the figure: **in** input · **msg** real inter-system message · **out** real system output · "
+        "**viz** derived for display · **mock** exists only here._",
     ]
     return str(out_path), "\n\n".join(lines)
 
 
-def _card(axis, title, body, y, colour="#2f3437", width=44):
+TAG_COLOURS = {"in": "#2f3437", "msg": "#1f5f8b", "out": "#1f5f8b", "viz": "#8a9296", "mock": "#c0392b"}
+TAG_KEY = [("in", "input the system receives"),
+           ("msg", "field of a real inter-system message"),
+           ("out", "real output of the system"),
+           ("viz", "derived from the output for display only"),
+           ("mock", "exists only in this mock")]
+
+
+def _card(axis, title, rows, y, colour="#2f3437", width=40):
+    """A card of tagged lines. ``rows`` are (tag, text); a tag of "" draws no marker.
+
+    Each line is its own text call so the provenance tag can carry its own colour - the
+    whole point of the tags is that a reader can tell a real message from a display aid.
+    """
     import textwrap
 
     axis.text(0.0, y, title, transform=axis.transAxes, fontsize=9.5, fontweight="bold",
               color=colour, va="top", family="monospace")
-    lines = []
-    for paragraph in body:
-        lines.extend(textwrap.wrap(paragraph, width) or [""])
-    axis.text(0.0, y - 0.035, "\n".join(lines), transform=axis.transAxes, fontsize=7.6,
-              va="top", family="monospace", color="#2f3437", linespacing=1.25)
-    return y - 0.035 - 0.0215 * (len(lines) + 1.2)
+    y -= 0.036
+    for tag, text in rows:
+        wrapped = textwrap.wrap(text, width) or [""]
+        for index, line in enumerate(wrapped):
+            if index == 0 and tag:
+                axis.text(0.0, y, f"{tag:>4}", transform=axis.transAxes, fontsize=7.0,
+                          color=TAG_COLOURS[tag], va="top", family="monospace", fontweight="bold")
+            axis.text(0.10, y, line, transform=axis.transAxes, fontsize=7.3, va="top",
+                      family="monospace", color="#2f3437")
+            y -= 0.0198
+    return y - 0.010
 
 
 def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig, token) -> None:
@@ -708,34 +729,53 @@ def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig,
     card = figure.add_subplot(outer[0])
     card.set_axis_off()
     y = 0.99
-    y = _card(card, "INPUT", [f'Scene: {sample.token[:8]}  ego {sample.initial_speed:.1f} m/s',
-                              f'Voice: "{command}"'], y)
-    y = _card(card, "TRION-REASON  (slow, symbolic)", [
-        f"lateral   {msg.lateral}" + (f"   window {msg.window_m[0]:.0f}-{msg.window_m[1]:.0f} m,"
-                                     f" deadline {msg.deadline_m:.0f} m" if msg.lateral != "KEEP" else ""),
-        f"cruise    {msg.cruise_label}   ({SPEED_KMH(res.speed_cap)})",
-        f"stop      {msg.planned_stop or '-'}",
-        f"light     {msg.which_light}",
-        "", *textwrap_lines(msg.why)], y, colour="#7b3fa0")
-    checks = [f"{'✓' if ok else '✗'} {name}: {note}" for name, ok, note in res.checks]
-    verdict = "REJECTED -> fallback KEEP" if res.fallback else f"accepted: drive {res.lateral}"
-    y = _card(card, "RESOLVER  (HD map, deterministic)", [*checks, "", verdict], y, colour="#1f5f8b")
-    action = [f"reach      {summary['reach_m']:.0f} m in 5 s",
-              f"lateral    {summary['lateral_move_m']:+.1f} m",
-              f"speed      {sample.initial_speed:.1f} -> {summary['final_speed']:.1f} m/s (cap {res.speed_cap:.1f})"]
+    y = _card(card, "INPUT", [
+        ("in", f"scene {sample.token[:8]}, ego {sample.initial_speed:.1f} m/s, cameras + HD map"),
+        ("in", f'voice: "{command}"')], y)
+    reason_rows = [
+        ("msg", f"lateral   {msg.lateral}"),
+    ]
+    if msg.lateral != "KEEP":
+        reason_rows += [("msg", f"window    {msg.window_m[0]:.0f}-{msg.window_m[1]:.0f} m"),
+                        ("msg", f"deadline  {msg.deadline_m:.0f} m")]
+    reason_rows += [("msg", f"cruise    {msg.cruise_label}   ({SPEED_KMH(res.speed_cap)})"),
+                    ("msg", f"stop      {msg.planned_stop or '-'}"),
+                    ("msg", f"light     {msg.which_light}"),
+                    ("msg", f"why: {msg.why}")]
+    y = _card(card, "TRION-REASON  (slow, symbolic)", reason_rows, y, colour="#7b3fa0")
+
+    resolver_rows = [("msg", f"{'✓' if ok else '✗'} {name}: {note}") for name, ok, note in res.checks]
+    resolver_rows.append(("msg", "REJECTED -> fallback KEEP" if res.fallback else f"accepted: drive {res.lateral}"))
+    if res.lateral != "KEEP":
+        resolver_rows.append(("msg", f"corridors: current + target, window {res.window_m[0]:.0f}-{res.window_m[1]:.0f} m"))
+    resolver_rows.append(("msg", f"speed cap {res.speed_cap:.1f} m/s" + (f", stop at {res.stop_x:.0f} m" if res.stop_x is not None else "")))
+    y = _card(card, "RESOLVER  (HD map, deterministic)", resolver_rows, y, colour="#1f5f8b")
+
+    action = [("out", "trajectory: 50 x (x, y, heading), 5 s @ 10 Hz  -> camera + map"),
+              ("viz", f"reach   {summary['reach_m']:.0f} m in 5 s      (= x of last point)"),
+              ("viz", f"lateral {summary['lateral_move_m']:+.1f} m vs own lane   (= y of last point - lane centre)"),
+              ("viz", f"speed   {sample.initial_speed:.1f} -> {summary['final_speed']:.1f} m/s   (= point spacing x 10 Hz)")]
     if summary["commit_at_m"]:
-        action.append(f"commits at {summary['commit_at_m']:.0f} m  (gap accepted, mocked)")
-    if res.stop_x is not None:
-        action.append(f"stops at   {res.stop_x:.0f} m")
-    _card(card, "TRION-ACTION  (fast, geometric)", action, y, colour="#b5651d")
+        action.append(("mock", f"commits at {summary['commit_at_m']:.0f} m: fixed 35% into the window; a real "
+                               f"system would need a head for this"))
+    y = _card(card, "TRION-ACTION  (fast, geometric)", action, y, colour="#b5651d")
+
+    # The key lives in the figure footer so it can never be pushed off the column.
+    x = 0.015
+    for tag, meaning in TAG_KEY:
+        figure.text(x, 0.012, tag, fontsize=7.4, fontweight="bold", color=TAG_COLOURS[tag],
+                    family="monospace", va="bottom")
+        figure.text(x + 0.004 + 0.0032 * len(tag), 0.012, f"= {meaning}     ", fontsize=7.4,
+                    color="#5d666b", family="monospace", va="bottom")
+        x += 0.006 + 0.0032 * (len(tag) + len(meaning) + 7)
 
     # -- column 2: front camera ------------------------------------------------------
     hero = figure.add_subplot(outer[1])
     hero.set_xticks([])
     hero.set_yticks([])
     hero.imshow(scene.views[CAMERA_VIEWS[0]][-1].load())
-    hero.set_title(f"Trion-Action on the front camera  -  {res.lateral}"
-                   + ("  (request rejected)" if res.fallback else ""), fontsize=10, color="#2f3437")
+    hero.set_title(f"Front camera: resolver target [msg] + Trion-Action trajectory [out], projected  -  {res.lateral}"
+                   + ("  (request rejected)" if res.fallback else ""), fontsize=9.5, color="#2f3437")
     xlim, ylim = hero.get_xlim(), hero.get_ylim()
     if rig is not None and rig.has(token):
         s_min = res.window_m[0] if res.lateral != "KEEP" else 10.0
@@ -755,8 +795,9 @@ def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig,
     # -- column 3: bird's-eye --------------------------------------------------------
     axis = figure.add_subplot(outer[2])
     _draw_trajectories(axis, traj[None], scene.history, None, 20.0,
-                       [(f"Trion-Action ({res.lateral})", traj[None], res.colour)])
+                       [(f"Trion-Action trajectory [out]", traj[None], res.colour)])
     handles, labels = axis.get_legend_handles_labels()
+    labels = [{"history": "ego history [in]", "ego": "ego [in]"}.get(l, l) for l in labels]
     paint_vector_map(axis, map_geoms)                 # context only; its legend is noise here
     # Show the manoeuvre, not the resolver's 200 m horizon: the window, the stop and the
     # plan set the range, and the lateral axis is stretched so lanes are readable.
@@ -765,35 +806,36 @@ def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig,
     axis.plot(cur[:, 1], cur[:, 0], color="0.45", linewidth=10, alpha=0.18,
               solid_capstyle="round", zorder=0.5)
     handles.append(mlines.Line2D([], [], color="0.45", linewidth=6, alpha=0.3))
-    labels.append("current lane corridor")
+    labels.append("current lane corridor [msg]")
     if res.lateral != "KEEP":
         tgt = res.target_xy[(res.target_xy[:, 0] >= res.window_m[0]) & (res.target_xy[:, 0] <= top)]
         axis.plot(tgt[:, 1], tgt[:, 0], color=res.colour, linewidth=12, alpha=0.28,
                   solid_capstyle="round", zorder=0.6)
         handles.append(mlines.Line2D([], [], color=res.colour, linewidth=7, alpha=0.45))
-        labels.append(f"target: resolver ({res.requested})")
+        labels.append(f"target corridor [msg]")
         markers = [(res.window_m[0], "window start")]
         if res.stop_x is None or abs(res.stop_x - res.window_m[1]) > 1.0:
             markers.append((res.window_m[1], "window end"))
         for s, name in markers:
             axis.axhline(s, color=res.colour, linestyle=(0, (4, 3)), linewidth=1.0, alpha=0.8)
-            axis.text(11.6, s, f" {name} {s:.0f} m", fontsize=7, va="bottom", ha="left",
+            axis.text(11.6, s, f" {name} {s:.0f} m [msg]", fontsize=7, va="bottom", ha="left",
                       color=res.colour)
         if res.deadline_m and res.deadline_m < top:
             axis.axhline(res.deadline_m, color="#c0392b", linestyle=":", linewidth=1.0)
-            axis.text(11.6, res.deadline_m, f" deadline {res.deadline_m:.0f} m",
+            axis.text(11.6, res.deadline_m, f" deadline {res.deadline_m:.0f} m [msg]",
                       fontsize=7, va="bottom", ha="left", color="#c0392b")
     if res.stop_x is not None:
         axis.axhline(res.stop_x, color=res.colour, linestyle="-", linewidth=1.2)
-        axis.text(11.6, res.stop_x, f" stop {res.stop_x:.0f} m", fontsize=7,
+        axis.text(11.6, res.stop_x, f" stop {res.stop_x:.0f} m [msg]", fontsize=7,
                   va="bottom", ha="left", color=res.colour)
     axis.set_aspect("auto")
     axis.set_xlim(12.0, -12.0)                        # left positive, drawn on the left
     axis.set_ylim(-12.0, top)
-    axis.set_title("Resolver corridors + Trion-Action plan  (lateral stretched)", fontsize=10)
+    axis.set_title("Bird's-eye: resolver corridors [msg] + trajectory [out]; map is context  (lateral stretched)",
+                   fontsize=9.5)
     axis.legend(handles, labels, loc="upper left", fontsize=7, framealpha=0.92)
 
-    figure.subplots_adjust(left=0.015, right=0.99, top=0.93, bottom=0.06)
+    figure.subplots_adjust(left=0.015, right=0.99, top=0.93, bottom=0.075)
     figure.savefig(path, dpi=150)
     plt.close(figure)
 
