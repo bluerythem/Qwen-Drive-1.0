@@ -487,11 +487,45 @@ def _floor_longitudinal_span(figure, minimum: float = 20.0) -> None:
         axis.set_ylim(centre - minimum / 2, centre + minimum / 2)
 
 
-def save_plan_figure(path, map_grid=None, map_geoms=None, noodles=None, **kwargs) -> None:
+def _draw_on_montage(figure, scene, overlays) -> None:
+    """Draw pixel-space polylines over the current frame of each camera view.
+
+    plot_scene_summary builds the montage row by row and adds the trajectory panel last, so
+    a view's current frame is at ``row * num_frames + (num_frames - 1)``.
+    """
+    if scene is None:
+        return
+    columns = scene.num_camera_frames
+    for row, view in enumerate(CAMERA_VIEWS):
+        index = row * columns + (columns - 1)
+        if view not in overlays or index >= len(figure.axes) - 1:
+            continue
+        axis = figure.axes[index]
+        # Plotting autoscales, and a projected path runs well outside the frame - the point
+        # at the ego's own bumper lands ~600 px below it. Pin the axes back to the image so
+        # the picture keeps its size and everything outside is simply clipped away.
+        xlim, ylim = axis.get_xlim(), axis.get_ylim()
+        for item in overlays[view]:
+            if item["kind"] == "band":
+                axis.fill(item["uv"][:, 0], item["uv"][:, 1], color=item["colour"],
+                          alpha=item["alpha"], linewidth=0, zorder=4)
+            else:
+                axis.plot(item["uv"][:, 0], item["uv"][:, 1], color=item["colour"],
+                          linewidth=item["width"], alpha=item["alpha"],
+                          solid_capstyle="round", zorder=5)
+        axis.set_xlim(xlim)
+        axis.set_ylim(ylim)
+        axis.set_autoscale_on(False)
+
+
+def save_plan_figure(path, map_grid=None, map_geoms=None, noodles=None,
+                     camera_overlays=None, **kwargs) -> None:
     """plot_scene_summary, optionally with a BEV map drawn underneath.
 
     ``map_grid`` paints a raster, ``map_geoms`` draws vector geometry, and ``noodles`` are
     thick translucent polylines drawn under the trajectories, for navigation targets.
+    ``camera_overlays`` maps a view name to polylines already in pixel coordinates, drawn
+    over that view's current frame in the montage.
     """
     import matplotlib.patches as patches
     import matplotlib.pyplot as plt
@@ -543,6 +577,8 @@ def save_plan_figure(path, map_grid=None, map_geoms=None, noodles=None, **kwargs
             labels.append(label)
         axis.legend(handles, labels, loc="lower left", fontsize=7, framealpha=0.92)
 
+    if camera_overlays:
+        _draw_on_montage(figure, kwargs.get("scene"), camera_overlays)
     _floor_longitudinal_span(figure)
     figure.savefig(path, dpi=150)
     plt.close(figure)
@@ -578,6 +614,18 @@ def run_perception_frame(token, score_thr, progress=gr.Progress()):
 MOCK_SCENE = "nuscenes 147"
 
 
+def camera_rig():
+    """Calibration for the nuScenes forward cameras, built on first use."""
+    if "rig" not in gt_map:
+        try:
+            from nuscenes_cameras import CameraRig
+
+            gt_map["rig"] = CameraRig(ROOT / "data" / "nuscenes")
+        except (FileNotFoundError, KeyError):
+            gt_map["rig"] = None
+    return gt_map["rig"]
+
+
 def mock_scene_index() -> int | None:
     return next((i for i, label in enumerate(LABELS) if label.startswith(MOCK_SCENE)), None)
 
@@ -603,7 +651,9 @@ def mock_plan(command, progress=gr.Progress()):
     wanted = list(COMMANDS) if command == "ALL THREE" else [command]
     goals = targets(geometry, speed)
 
+    rig = camera_rig()
     overlays, noodles, rows = [], [], []
+    camera_overlays: dict[str, list] = {}
     for name in wanted:
         path = trajectory(name, geometry, speed)
         overlays.append((f"{name}", path[None], COMMAND_COLOURS[name]))
@@ -612,10 +662,25 @@ def mock_plan(command, progress=gr.Progress()):
         rows.append(f"| {name} | {path[-1, 0]:.1f} | {path[-1, 1]:+.2f} | "
                     f"{path[-1, 1] - path[0, 1]:+.2f} |")
 
+        if rig is not None and rig.has(token):
+            for view in CAMERA_VIEWS:
+                drawn_here = camera_overlays.setdefault(view, [])
+                if name in goals:
+                    band = rig.project_band(token, view, goals[name], width=1.1)
+                    if band is not None:
+                        drawn_here.append({"kind": "band", "uv": band,
+                                           "colour": COMMAND_COLOURS[name], "alpha": 0.32})
+                path_uv = rig.project(token, view, path[:, :2])
+                if path_uv is not None:
+                    drawn_here.append({"kind": "line", "uv": path_uv,
+                                       "colour": COMMAND_COLOURS[name], "width": 2.4,
+                                       "alpha": 0.95})
+
     OUT.mkdir(parents=True, exist_ok=True)
     out_path = OUT / f"mock_{command.replace(' ', '_').lower()}.png"
     save_plan_figure(
-        out_path, map_geoms=drawn, noodles=noodles, scene=sample.scene,
+        out_path, map_geoms=drawn, noodles=noodles, camera_overlays=camera_overlays,
+        scene=sample.scene,
         trajectories=overlays[0][1], history=sample.scene.history, ground_truth=None,
         reasoning=None, title=f"{MOCK_SCENE} - mocked plans, no model", overlays=overlays,
     )
@@ -743,7 +808,8 @@ def build_ui():
                 "navigation target, drawn along the centre of the lane the command points "
                 "at; the thin line is a hand-built future the ego might drive. "
                 "`CHANGE LANE LEFT` becomes a pull-over, because there is no lane to the "
-                "left here - only the kerb."
+                "left here - only the kerb. Both are also projected onto the current camera "
+                "frames through the nuScenes calibration."
             )
             mock_rd = gr.Radio(
                 ["ALL THREE", "GO STRAIGHT", "CHANGE LANE LEFT", "CHANGE LANE RIGHT"],

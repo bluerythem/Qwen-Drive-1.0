@@ -369,3 +369,28 @@ Two fixes came out of building it:
 - The drivable polygon is **clipped to the patch**, and the cut runs along the patch border,
   so drawing the boundary as a road edge painted one straight across the road 30 m ahead of
   the ego. Boundary runs that lie on the patch border are now skipped.
+
+
+### Drawing the plans on the camera images
+
+Both the navigation target and the mocked trajectory are also projected onto the **current
+frame** of each camera view, through the nuScenes calibration
+(`tools/nuscenes_cameras.py`). Points are taken at ground level, `z = 0` in the ego frame -
+the ego origin sits on the road, which is why the front camera's calibrated height is ~1.5 m.
+
+The target is drawn as a **ribbon of constant metric width** (1.1 m), not a fixed-pixel line:
+both edges are projected and the polygon between them filled, so perspective narrows it with
+distance and it reads as something painted on the road. The trajectory stays a thin line.
+
+Only the front camera usually shows anything. The side cameras are projected too, but a path
+running up the ego's own lane falls outside their field of view and is clipped - which is
+correct, not a failure.
+
+Two things this needed:
+
+- Plotting on a montage axes **autoscales it**, and a projected path runs far outside the
+  frame - the point at the ego's own bumper lands ~600 px below the image. The first attempt
+  shrank every camera picture to a corner of its panel. The axes limits are now captured
+  before drawing and pinned back afterwards, so everything outside is simply clipped.
+- `CameraFrame.load()` does not resize, so the images are the original 1600x900 and pixel
+  coordinates map straight onto the montage without scaling.
