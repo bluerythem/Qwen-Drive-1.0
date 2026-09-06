@@ -711,6 +711,8 @@ def trion_run(scene_label, nav_choice, command_choice, custom_command, preferenc
         f"**Trion-Action** → drives `{resolved.lateral}`. Real output: a 50×3 trajectory (5 s @ 10 Hz). "
         f"Derived for display: reaches {summary['reach_m']:.0f} m, lateral {summary['lateral_move_m']:+.1f} m vs own lane, "
         f"ends at {summary['final_speed']:.1f} m/s (cap {resolved.speed_cap:.1f} is a resolver input)"
+        + (f". Change scheduled at {summary['commit_at_m']:.0f} m — beyond this tick's 5 s horizon, so this "
+           f"trajectory is the approach; a later tick executes it" if summary["commit_at_m"] and summary["commit_at_m"] > summary["reach_m"] else "")
         + (f". *Mock only:* commits at {summary['commit_at_m']:.0f} m — a fixed 35 % into the window, "
            f"not something a real planner emits unless given a head for it" if summary["commit_at_m"] else ""),
         "_Tags on the figure: **in** input · **msg** real inter-system message · **out** real system output · "
@@ -806,6 +808,10 @@ def trion_figure(path, sample, command, nav_choice, route, msg, res, traj, summa
               ("viz", f"lateral {summary['lateral_move_m']:+.1f} m vs own lane  (y - lane centre)"),
               ("viz", f"speed   {sample.initial_speed:.1f} -> {summary['final_speed']:.1f} m/s  (point spacing x 10 Hz)")]
     if summary["commit_at_m"]:
+        if summary["commit_at_m"] > summary["reach_m"]:
+            action.append(("out", f"this tick: approach only; the change is scheduled at "
+                                  f"{summary['commit_at_m']:.0f} m, beyond the 5 s horizon, and "
+                                  f"executes on a later tick"))
         action.append(("mock", f"commits at {summary['commit_at_m']:.0f} m: fixed 35% into the window; "
                                f"a real planner needs a head for this"))
     y = _card(card, "TRION-ACTION  (fast, geometric)", action, y, colour="#b5651d")
@@ -865,13 +871,17 @@ def trion_figure(path, sample, command, nav_choice, route, msg, res, traj, summa
         handles.append(mlines.Line2D([], [], color=res.colour, linewidth=7, alpha=0.45))
         labels.append(f"target corridor [msg]")
         markers = [(res.window_m[0], "window start")]
-        if res.stop_x is None or abs(res.stop_x - res.window_m[1]) > 1.0:
+        ends_at_stop = res.stop_x is not None and abs(res.stop_x - res.window_m[1]) <= 1.0
+        ends_at_deadline = res.deadline_m and abs(res.deadline_m - res.window_m[1]) <= 1.0
+        if not ends_at_stop and not ends_at_deadline:
             markers.append((res.window_m[1], "window end"))
+        elif ends_at_deadline:
+            markers.append((res.window_m[1], "window end = deadline"))
         for s, name in markers:
             axis.axhline(s, color=res.colour, linestyle=(0, (4, 3)), linewidth=1.0, alpha=0.8)
             axis.text(11.6, s, f" {name} {s:.0f} m [msg]", fontsize=7, va="bottom", ha="left",
                       color=res.colour)
-        if res.deadline_m and res.deadline_m < top:
+        if res.deadline_m and res.deadline_m < top and not ends_at_deadline:
             axis.axhline(res.deadline_m, color="#c0392b", linestyle=":", linewidth=1.0)
             axis.text(11.6, res.deadline_m, f" deadline {res.deadline_m:.0f} m [msg]",
                       fontsize=7, va="bottom", ha="left", color="#c0392b")
