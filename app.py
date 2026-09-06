@@ -1030,6 +1030,35 @@ def build_ui():
             "One VLM, three inference modes. Pick a navigation command and plan, or just "
             "ask the model about the scene."
         )
+        with gr.Tab("Trion mock"):
+            gr.Markdown(
+                "**Two-system stack, mocked end to end. No neural network runs.** A road-level "
+                "route step from the nav app goes through the **Route matcher** (HD map: which "
+                "lanes make the turn, how many changes, how far). That plus a voice command goes "
+                "to **Trion-Reason** (slow, symbolic: arbitrates route vs voice, judges "
+                "feasibility, emits a lane goal + window + deadline). The **Resolver** turns the "
+                "symbols into lane corridors and validates them, and **Trion-Action** (fast, "
+                "geometric) chooses when inside the window. Route matcher and resolver are real "
+                "nuScenes map logic; the two systems are rule-based stand-ins."
+            )
+            with gr.Row():
+                trion_scene = gr.Dropdown(trion_scene_labels(), value=trion_scene_labels()[0],
+                                          label="Scene", scale=3)
+                trion_pref = gr.Radio(["slower", "normal", "faster"], value="normal",
+                                      label="Speed preference", scale=1)
+            with gr.Row():
+                trion_nav = gr.Dropdown(list(TRION_NAV), value=TRION_NAV[2],
+                                        label="Navigation (from the nav app)", scale=2)
+                trion_cmd = gr.Dropdown(list(TRION_COMMANDS), value=TRION_COMMANDS[0],
+                                        label="Voice command", scale=2)
+                trion_custom = gr.Textbox(label="...or type one", placeholder="e.g. pull over and stop",
+                                          scale=3)
+            trion_btn = gr.Button("Run Trion (mock)", variant="primary")
+            trion_im = gr.Image(label="Input → Trion-Reason → Resolver → Trion-Action", type="filepath")
+            trion_md = gr.Markdown()
+            trion_btn.click(trion_run, [trion_scene, trion_nav, trion_cmd, trion_custom, trion_pref],
+                            [trion_im, trion_md], api_name="trion")
+
         with gr.Tab("Planning"):
             gr.Markdown(
                 "`scene N` are the four bundled WOD-E2E scenes. `nuscenes NNN` are built "
@@ -1129,35 +1158,6 @@ def build_ui():
                 run_perception_frame, [frame_dd, thr_sl], [pf_vis, pf_info],
                 api_name="run_perception_frame",
             )
-
-        with gr.Tab("Trion mock"):
-            gr.Markdown(
-                "**Two-system stack, mocked end to end. No neural network runs.** A road-level "
-                "route step from the nav app goes through the **Route matcher** (HD map: which "
-                "lanes make the turn, how many changes, how far). That plus a voice command goes "
-                "to **Trion-Reason** (slow, symbolic: arbitrates route vs voice, judges "
-                "feasibility, emits a lane goal + window + deadline). The **Resolver** turns the "
-                "symbols into lane corridors and validates them, and **Trion-Action** (fast, "
-                "geometric) chooses when inside the window. Route matcher and resolver are real "
-                "nuScenes map logic; the two systems are rule-based stand-ins."
-            )
-            with gr.Row():
-                trion_scene = gr.Dropdown(trion_scene_labels(), value=trion_scene_labels()[0],
-                                          label="Scene", scale=3)
-                trion_pref = gr.Radio(["slower", "normal", "faster"], value="normal",
-                                      label="Speed preference", scale=1)
-            with gr.Row():
-                trion_nav = gr.Dropdown(list(TRION_NAV), value=TRION_NAV[2],
-                                        label="Navigation (from the nav app)", scale=2)
-                trion_cmd = gr.Dropdown(list(TRION_COMMANDS), value=TRION_COMMANDS[0],
-                                        label="Voice command", scale=2)
-                trion_custom = gr.Textbox(label="...or type one", placeholder="e.g. pull over and stop",
-                                          scale=3)
-            trion_btn = gr.Button("Run Trion (mock)", variant="primary")
-            trion_im = gr.Image(label="Input → Trion-Reason → Resolver → Trion-Action", type="filepath")
-            trion_md = gr.Markdown()
-            trion_btn.click(trion_run, [trion_scene, trion_nav, trion_cmd, trion_custom, trion_pref],
-                            [trion_im, trion_md], api_name="trion")
 
         with gr.Tab("General VQA"):
             gr.Markdown(
