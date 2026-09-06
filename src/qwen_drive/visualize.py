@@ -17,11 +17,12 @@
 from __future__ import annotations
 
 import textwrap
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 
-from .scene import CAMERA_VIEWS
+from .scene import CAMERA_VIEWS, NAV_COMMANDS
 
 __all__ = ["plot_trajectories", "plot_scene_summary"]
 
@@ -32,6 +33,7 @@ def _draw_trajectories(
     history: np.ndarray | None,
     ground_truth: np.ndarray | None,
     lateral_span: float,
+    overlays: Sequence[tuple[str, np.ndarray, str]] | None = None,
 ) -> None:
     """Draw history, ground truth and predictions on ``axis`` in the ego frame.
 
@@ -46,28 +48,33 @@ def _draw_trajectories(
         axis.plot(
             ground_truth[:, 1], ground_truth[:, 0], color="black", linewidth=2, label="ground truth"
         )
-    for index, trajectory in enumerate(trajectories):
-        axis.plot(
-            trajectory[:, 1],
-            trajectory[:, 0],
-            linewidth=1.5,
-            alpha=0.9 if index == 0 else 0.4,
-            label="prediction" if index == 0 else None,
-        )
+    groups = list(overlays) if overlays else [("prediction", trajectories, None)]
+    for label, group, color in groups:
+        for index, trajectory in enumerate(np.asarray(group)):
+            axis.plot(
+                trajectory[:, 1],
+                trajectory[:, 0],
+                color=color,
+                linewidth=1.5,
+                alpha=0.9 if index == 0 else 0.4,
+                label=label if index == 0 else None,
+            )
     axis.scatter([0], [0], marker="s", color="red", zorder=5, label="ego")
 
     axis.set_xlabel("lateral y [m]  (left positive)")
     axis.set_ylabel("longitudinal x [m]")
     axis.set_aspect("equal")
     lateral = np.concatenate(
-        [trajectories[:, :, 1].ravel()]
+        [np.asarray(group)[:, :, 1].ravel() for _, group, _ in groups]
         + ([history[:, 1]] if history is not None else [])
         + ([ground_truth[:, 1]] if ground_truth is not None else [])
         + [np.zeros(1)]
     )
     centre = 0.5 * (lateral.min() + lateral.max())
     half = max(0.5 * lateral_span, 0.5 * (lateral.max() - lateral.min()) * 1.1)
-    axis.set_xlim(centre - half, centre + half)
+    # y is positive to the left, so the axis has to run right-to-left for the plot to
+    # read as a bird's-eye view: without this a left turn is drawn curving right.
+    axis.set_xlim(centre + half, centre - half)
     axis.grid(alpha=0.3)
     axis.legend(loc="upper left", fontsize=8)
 
@@ -108,6 +115,14 @@ def _view_label(view: str) -> str:
     return view.strip("<>").replace(" VIEW", "").title()
 
 
+def _nav_command_label(scene) -> str:
+    """The navigation command the scene was planned under, as it reads in the prompt."""
+    try:
+        return f"navigation command: {NAV_COMMANDS[int(scene.nav_command)]}"
+    except (AttributeError, IndexError, TypeError, ValueError):
+        return ""
+
+
 def plot_scene_summary(
     scene,
     trajectories: np.ndarray,
@@ -117,8 +132,12 @@ def plot_scene_summary(
     title: str = "",
     output: str | Path | None = None,
     lateral_span: float = 20.0,
+    overlays: Sequence[tuple[str, np.ndarray, str]] | None = None,
 ):
     """A one-figure summary of a planning result.
+
+    ``overlays`` draws several labelled, colour-coded sets of trajectories on one axis
+    instead of the single unlabelled set, for comparing plans of the same scene.
 
     The camera ring fills a three-row grid on the left (front, front-left, front-right,
     one row each, oldest frame to current left to right), the ego-frame trajectory plot
@@ -157,9 +176,12 @@ def plot_scene_summary(
                 ax.set_title(label, fontsize=9, color="#2f3437")
 
     axis = figure.add_subplot(outer[1])
-    _draw_trajectories(axis, trajectories, history, ground_truth, lateral_span)
-    if title:
-        axis.set_title(title, fontsize=10)
+    _draw_trajectories(axis, trajectories, history, ground_truth, lateral_span, overlays)
+    # With overlays each set carries its own command, so the single label would mislead.
+    command = "" if overlays else _nav_command_label(scene)
+    if title or command:
+        heading = "\n".join(part for part in (title, command) if part)
+        axis.set_title(heading, fontsize=10)
 
     bottom = 0.06
     if reasoning:
