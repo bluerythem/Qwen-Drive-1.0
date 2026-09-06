@@ -613,7 +613,16 @@ def run_perception_frame(token, score_thr, progress=gr.Progress()):
 # stand-ins so the interface between them can be exercised and shown.
 # ---------------------------------------------------------------------------
 
-TRION_SCENES = ("nuscenes 147", "nuscenes 186", "nuscenes 199", "nuscenes 203")
+# Four scenes, four route stories: already in the right lane / one change / two changes /
+# not enough road. Descriptions come from the route matcher run offline on each.
+TRION_SCENES = {
+    "nuscenes 147": "3 lanes, kerb lane. Left turn 204 m ahead needs no change; right turn at 13 m is out of reach",
+    "nuscenes 132": "2 lanes, left lane. Right turn 103 m ahead needs ONE change; right side is a junction until 60 m",
+    "nuscenes 189": "3 lanes, kerb lane. Right turn 127 m ahead needs TWO changes - a sequence",
+    "nuscenes 203": "3 lanes, kerb lane, 15 m/s. Right turn at 33 m needs two changes - not possible, reroute",
+}
+TRION_NAV = ("continue on route", "turn left at the next junction", "turn right at the next junction",
+             "arrive: destination on the left")
 TRION_COMMANDS = ("keep going", "change to the right lane", "change to the left lane",
                   "pull over", "go faster", "go slower")
 
@@ -631,14 +640,25 @@ def camera_rig():
 
 
 def trion_scene_labels() -> list[str]:
-    return [label for label in LABELS if any(label.startswith(s + " ") for s in TRION_SCENES)]
+    out = []
+    for key, desc in TRION_SCENES.items():
+        match = next((l for l in LABELS if l.startswith(key + " ")), None)
+        if match:
+            out.append(f"{key}  |  {desc}")
+    return out
 
 
-def trion_run(scene_label, command_choice, custom_command, preference, progress=gr.Progress()):
-    from trion import Resolver, act, reason
+def trion_scene_index(choice: str) -> int:
+    key = choice.split("  |  ")[0]
+    return next(i for i, l in enumerate(LABELS) if l.startswith(key + " "))
+
+
+def trion_run(scene_label, nav_choice, command_choice, custom_command, preference,
+              progress=gr.Progress()):
+    from trion import Resolver, act, lane_route, reason
 
     command = (custom_command or "").strip() or command_choice
-    index = LABELS.index(scene_label)
+    index = trion_scene_index(scene_label)
     sample = SAMPLES[index]
     token = sample.scene.metadata.get("token", "")
     speed = sample.initial_speed
@@ -646,13 +666,20 @@ def trion_run(scene_label, command_choice, custom_command, preference, progress=
     if helper is None or token not in helper.pose:
         return None, "needs the nuScenes map expansion in data/nuscenes/maps/expansion/"
 
-    progress(0.2, desc="Trion-Reason")
-    pref = {"slower": -1, "normal": 0, "faster": 1}[preference]
-    msg = reason(command, pref, {"speed": speed})
-
-    progress(0.4, desc="Resolver")
     if "resolver" not in gt_map:
         gt_map["resolver"] = Resolver(helper)
+
+    progress(0.15, desc="Route matcher")
+    manoeuvre = {"continue on route": "CONTINUE", "turn left at the next junction": "TURN LEFT",
+                 "turn right at the next junction": "TURN RIGHT",
+                 "arrive: destination on the left": "ARRIVE"}[nav_choice]
+    route = lane_route(gt_map["resolver"], token, manoeuvre)
+
+    progress(0.3, desc="Trion-Reason")
+    pref = {"slower": -1, "normal": 0, "faster": 1}[preference]
+    msg = reason(command, pref, {"speed": speed}, route)
+
+    progress(0.45, desc="Resolver")
     geometry = helper.vector(token, half_length=70.0, half_width=25.0)
     resolved = gt_map["resolver"].resolve(token, msg, geometry, speed=speed)
 
@@ -661,13 +688,22 @@ def trion_run(scene_label, command_choice, custom_command, preference, progress=
 
     OUT.mkdir(parents=True, exist_ok=True)
     out_path = OUT / f"trion_{index}_{resolved.requested.lower()}.png"
-    trion_figure(out_path, sample, command, msg, resolved, trajectory, summary,
+    trion_figure(out_path, sample, command, nav_choice, route, msg, resolved, trajectory, summary,
                  helper.vector(token, half_length=95.0, half_width=14.0), camera_rig(), token)
 
     ok = "".join("✓" if ok else "✗" for _, ok, _ in resolved.checks)
     verdict = ("**rejected → fallback KEEP**" if resolved.fallback else "**accepted**")
+    if route.get("matched"):
+        rt = (f"`{route['manoeuvre']}`" + (f" at {route['at_m']:.0f} m" if route.get("at_m") else "")
+              + f" — lane {route['current_lane'] + 1} of {route['lanes']}"
+              + (f", valid lanes {[i + 1 for i in route['valid']]}, **{route['changes_needed']} change(s) "
+                 f"{route['direction'].lower()}**" if route.get("changes_needed") else ", already in a valid lane"))
+    else:
+        rt = f"`{route['manoeuvre']}` — **unmatched**: {route.get('reason', '')}"
     lines = [
-        f"**Trion-Reason** → `{msg.lateral}`, cruise `{msg.cruise_label}`"
+        f"**Route matcher** → {rt}",
+        f"**Trion-Reason** → `{msg.lateral}` (source `{msg.source}`), cruise `{msg.cruise_label}`"
+        + (f", then {msg.pending}" if msg.pending else "") + (" — **asks nav to reroute**" if msg.reroute else "")
         + (f", window {msg.window_m[0]:.0f}–{msg.window_m[1]:.0f} m" if msg.lateral != "KEEP" else "")
         + f"  \n_{msg.why}_",
         f"**Resolver** → {verdict} &nbsp;`{ok}`  \n"
@@ -699,22 +735,23 @@ def _card(axis, title, rows, y, colour="#2f3437", width=40):
     """
     import textwrap
 
-    axis.text(0.0, y, title, transform=axis.transAxes, fontsize=9.5, fontweight="bold",
+    axis.text(0.0, y, title, transform=axis.transAxes, fontsize=9.0, fontweight="bold",
               color=colour, va="top", family="monospace")
-    y -= 0.036
+    y -= 0.032
     for tag, text in rows:
         wrapped = textwrap.wrap(text, width) or [""]
         for index, line in enumerate(wrapped):
             if index == 0 and tag:
                 axis.text(0.0, y, f"{tag:>4}", transform=axis.transAxes, fontsize=7.0,
                           color=TAG_COLOURS[tag], va="top", family="monospace", fontweight="bold")
-            axis.text(0.10, y, line, transform=axis.transAxes, fontsize=7.3, va="top",
+            axis.text(0.10, y, line, transform=axis.transAxes, fontsize=7.0, va="top",
                       family="monospace", color="#2f3437")
-            y -= 0.0198
-    return y - 0.010
+            y -= 0.0182
+    return y - 0.008
 
 
-def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig, token) -> None:
+def trion_figure(path, sample, command, nav_choice, route, msg, res, traj, summary, map_geoms,
+                 rig, token) -> None:
     """Story left to right: the three stages as cards, the front camera, the map."""
     import matplotlib.lines as mlines
     import matplotlib.patches as patches
@@ -731,16 +768,29 @@ def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig,
     y = 0.99
     y = _card(card, "INPUT", [
         ("in", f"scene {sample.token[:8]}, ego {sample.initial_speed:.1f} m/s, cameras + HD map"),
+        ("in", f'nav app: "{nav_choice}"'),
         ("in", f'voice: "{command}"')], y)
+    if route.get("matched"):
+        nav_rows = [("msg", f"{route['manoeuvre']}" + (f" at {route['at_m']:.0f} m" if route.get("at_m") else "")),
+                    ("msg", f"lanes {route['lanes']}, ego in lane {route['current_lane'] + 1}"
+                            + (f", valid {[i + 1 for i in route['valid']]}" if route.get("valid") is not None else ""))]
+        if route.get("changes_needed"):
+            nav_rows.append(("msg", f"needs {route['changes_needed']} change(s) {route['direction'].lower()}"))
+    else:
+        nav_rows = [("msg", f"{route['manoeuvre']}: unmatched - {route.get('reason', '')}")]
+    y = _card(card, "ROUTE MATCHER  (SD route -> HD lanes)", nav_rows, y, colour="#1a7f5a")
     reason_rows = [
-        ("msg", f"lateral   {msg.lateral}"),
+        ("msg", f"lateral   {msg.lateral}   (source: {msg.source})"),
     ]
     if msg.lateral != "KEEP":
         reason_rows += [("msg", f"window    {msg.window_m[0]:.0f}-{msg.window_m[1]:.0f} m"),
                         ("msg", f"deadline  {msg.deadline_m:.0f} m")]
+    if msg.pending:
+        reason_rows.append(("msg", f"pending   {msg.pending}"))
+    if msg.reroute:
+        reason_rows.append(("msg", "reroute   requested from the nav app"))
     reason_rows += [("msg", f"cruise    {msg.cruise_label}   ({SPEED_KMH(res.speed_cap)})"),
                     ("msg", f"stop      {msg.planned_stop or '-'}"),
-                    ("msg", f"light     {msg.which_light}"),
                     ("msg", f"why: {msg.why}")]
     y = _card(card, "TRION-REASON  (slow, symbolic)", reason_rows, y, colour="#7b3fa0")
 
@@ -751,21 +801,21 @@ def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig,
     resolver_rows.append(("msg", f"speed cap {res.speed_cap:.1f} m/s" + (f", stop at {res.stop_x:.0f} m" if res.stop_x is not None else "")))
     y = _card(card, "RESOLVER  (HD map, deterministic)", resolver_rows, y, colour="#1f5f8b")
 
-    action = [("out", "trajectory: 50 x (x, y, heading), 5 s @ 10 Hz  -> camera + map"),
-              ("viz", f"reach   {summary['reach_m']:.0f} m in 5 s      (= x of last point)"),
-              ("viz", f"lateral {summary['lateral_move_m']:+.1f} m vs own lane   (= y of last point - lane centre)"),
-              ("viz", f"speed   {sample.initial_speed:.1f} -> {summary['final_speed']:.1f} m/s   (= point spacing x 10 Hz)")]
+    action = [("out", "trajectory 50 x (x, y, heading), 5 s @ 10 Hz -> camera + map"),
+              ("viz", f"reach   {summary['reach_m']:.0f} m in 5 s   (x of last point)"),
+              ("viz", f"lateral {summary['lateral_move_m']:+.1f} m vs own lane  (y - lane centre)"),
+              ("viz", f"speed   {sample.initial_speed:.1f} -> {summary['final_speed']:.1f} m/s  (point spacing x 10 Hz)")]
     if summary["commit_at_m"]:
-        action.append(("mock", f"commits at {summary['commit_at_m']:.0f} m: fixed 35% into the window; a real "
-                               f"system would need a head for this"))
+        action.append(("mock", f"commits at {summary['commit_at_m']:.0f} m: fixed 35% into the window; "
+                               f"a real planner needs a head for this"))
     y = _card(card, "TRION-ACTION  (fast, geometric)", action, y, colour="#b5651d")
 
     # The key lives in the figure footer so it can never be pushed off the column.
     x = 0.015
     for tag, meaning in TAG_KEY:
-        figure.text(x, 0.012, tag, fontsize=7.4, fontweight="bold", color=TAG_COLOURS[tag],
+        figure.text(x, 0.008, tag, fontsize=7.4, fontweight="bold", color=TAG_COLOURS[tag],
                     family="monospace", va="bottom")
-        figure.text(x + 0.004 + 0.0032 * len(tag), 0.012, f"= {meaning}     ", fontsize=7.4,
+        figure.text(x + 0.004 + 0.0032 * len(tag), 0.008, f"= {meaning}     ", fontsize=7.4,
                     color="#5d666b", family="monospace", va="bottom")
         x += 0.006 + 0.0032 * (len(tag) + len(meaning) + 7)
 
@@ -801,7 +851,8 @@ def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig,
     paint_vector_map(axis, map_geoms)                 # context only; its legend is noise here
     # Show the manoeuvre, not the resolver's 200 m horizon: the window, the stop and the
     # plan set the range, and the lateral axis is stretched so lanes are readable.
-    top = max(res.window_m[1], summary["reach_m"], res.stop_x or 0.0, 45.0) + 15.0
+    top = max(res.window_m[1], summary["reach_m"], res.stop_x or 0.0, 45.0,
+              (msg.route_turn_m or 0.0) if (msg.route_turn_m or 0.0) < 150 else 0.0) + 15.0
     cur = res.current_xy[(res.current_xy[:, 0] >= 0) & (res.current_xy[:, 0] <= top)]
     axis.plot(cur[:, 1], cur[:, 0], color="0.45", linewidth=10, alpha=0.18,
               solid_capstyle="round", zorder=0.5)
@@ -824,6 +875,10 @@ def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig,
             axis.axhline(res.deadline_m, color="#c0392b", linestyle=":", linewidth=1.0)
             axis.text(11.6, res.deadline_m, f" deadline {res.deadline_m:.0f} m [msg]",
                       fontsize=7, va="bottom", ha="left", color="#c0392b")
+    if msg.route_turn_m and route.get("manoeuvre") in ("TURN LEFT", "TURN RIGHT") and msg.route_turn_m < top:
+        axis.axhline(msg.route_turn_m, color="#1a7f5a", linestyle="-.", linewidth=1.1)
+        axis.text(11.6, msg.route_turn_m, f" route: {route['manoeuvre'].lower()} {msg.route_turn_m:.0f} m [msg]",
+                  fontsize=7, va="bottom", ha="left", color="#1a7f5a")
     if res.stop_x is not None:
         axis.axhline(res.stop_x, color=res.colour, linestyle="-", linewidth=1.2)
         axis.text(11.6, res.stop_x, f" stop {res.stop_x:.0f} m [msg]", fontsize=7,
@@ -833,9 +888,9 @@ def trion_figure(path, sample, command, msg, res, traj, summary, map_geoms, rig,
     axis.set_ylim(-12.0, top)
     axis.set_title("Bird's-eye: resolver corridors [msg] + trajectory [out]; map is context  (lateral stretched)",
                    fontsize=9.5)
-    axis.legend(handles, labels, loc="upper left", fontsize=7, framealpha=0.92)
+    axis.legend(handles, labels, loc="lower right", fontsize=6.8, framealpha=0.92)
 
-    figure.subplots_adjust(left=0.015, right=0.99, top=0.93, bottom=0.075)
+    figure.subplots_adjust(left=0.015, right=0.99, top=0.93, bottom=0.085)
     figure.savefig(path, dpi=150)
     plt.close(figure)
 
@@ -959,27 +1014,31 @@ def build_ui():
 
         with gr.Tab("Trion mock"):
             gr.Markdown(
-                "**Two-system stack, mocked end to end. No neural network runs.** "
-                "A voice command goes to **Trion-Reason** (slow, symbolic: lane goal + window "
-                "+ speed preference), the **Resolver** turns the symbols into lane corridors "
-                "from the HD map and validates them, and **Trion-Action** (fast, geometric) "
-                "chooses when inside the window and draws the manoeuvre. The resolver is real "
-                "nuScenes map logic; the two systems are rule-based stand-ins for the models."
+                "**Two-system stack, mocked end to end. No neural network runs.** A road-level "
+                "route step from the nav app goes through the **Route matcher** (HD map: which "
+                "lanes make the turn, how many changes, how far). That plus a voice command goes "
+                "to **Trion-Reason** (slow, symbolic: arbitrates route vs voice, judges "
+                "feasibility, emits a lane goal + window + deadline). The **Resolver** turns the "
+                "symbols into lane corridors and validates them, and **Trion-Action** (fast, "
+                "geometric) chooses when inside the window. Route matcher and resolver are real "
+                "nuScenes map logic; the two systems are rule-based stand-ins."
             )
             with gr.Row():
                 trion_scene = gr.Dropdown(trion_scene_labels(), value=trion_scene_labels()[0],
-                                          label="Scene (multi-lane, ego in the kerb lane)", scale=3)
+                                          label="Scene", scale=3)
                 trion_pref = gr.Radio(["slower", "normal", "faster"], value="normal",
                                       label="Speed preference", scale=1)
             with gr.Row():
-                trion_cmd = gr.Dropdown(list(TRION_COMMANDS), value=TRION_COMMANDS[1],
+                trion_nav = gr.Dropdown(list(TRION_NAV), value=TRION_NAV[2],
+                                        label="Navigation (from the nav app)", scale=2)
+                trion_cmd = gr.Dropdown(list(TRION_COMMANDS), value=TRION_COMMANDS[0],
                                         label="Voice command", scale=2)
                 trion_custom = gr.Textbox(label="...or type one", placeholder="e.g. pull over and stop",
                                           scale=3)
             trion_btn = gr.Button("Run Trion (mock)", variant="primary")
             trion_im = gr.Image(label="Input → Trion-Reason → Resolver → Trion-Action", type="filepath")
             trion_md = gr.Markdown()
-            trion_btn.click(trion_run, [trion_scene, trion_cmd, trion_custom, trion_pref],
+            trion_btn.click(trion_run, [trion_scene, trion_nav, trion_cmd, trion_custom, trion_pref],
                             [trion_im, trion_md], api_name="trion")
 
         with gr.Tab("General VQA"):

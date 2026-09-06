@@ -42,49 +42,99 @@ class ReasonMessage:
     planned_stop: str | None
     which_light: str
     why: str
+    source: str = "NONE"            # ROUTE | VOICE | NONE - who asked for the lateral goal
+    pending: str | None = None      # e.g. "+1 RIGHT before the junction": the next goal
+    reroute: bool = False           # the route's manoeuvre cannot be made; ask nav to reroute
+    route_turn_m: float | None = None
 
     @property
     def cruise_label(self) -> str:
         return f"LIMIT{self.cruise:+d}"
 
 
-def reason(command: str, preference: int, ctx: dict) -> ReasonMessage:
-    """The slow system, mocked: a command and scene context in, a symbolic goal out.
+def reason(command: str, preference: int, ctx: dict, route: dict | None = None) -> ReasonMessage:
+    """The slow system, mocked: route step + voice command + context in, one symbolic goal out.
 
-    It deliberately does *not* consult lane geometry - a reasoning model may not know that
-    there is no lane to the left. Catching that is the resolver's job, and letting the
-    request through is what makes the validation path visible.
+    Two intents meet here and this is where they are arbitrated. The route is the default;
+    a voice request is a scoped override - it wins until done, then the route resumes. The
+    route's own feasibility is judged symbolically: N lane changes need roughly N x 2.5 s of
+    travel plus a margin, and if the junction is closer than that the honest answer is to
+    continue and ask the nav app to reroute, not to force the gap.
+
+    It deliberately does *not* consult lane geometry for the voice request - a reasoning
+    model may not know there is no lane to the left. Catching that is the resolver's job.
     """
     text = command.lower()
-    why = []
-    lateral, stop = "KEEP", None
-    if "pull" in text or "park" in text or "stop" in text:
-        lateral, stop = "PULL_OVER", "PULL_OVER_POINT"
-        why.append("User asked to pull over: leave the carriageway on the near side and stop.")
-    elif "left" in text:
-        lateral = "LEFT"
-        why.append("User asked for the lane to the left.")
-    elif "right" in text:
-        lateral = "RIGHT"
-        why.append("User asked for the lane to the right.")
-    else:
-        why.append("No lane request: continue in the current lane along the route.")
+    speed = float(ctx.get("speed", 10.0))
+    why: list[str] = []
 
-    cruise = preference + ("faster" in text) - ("slower" in text)
-    cruise = int(np.clip(cruise, -2, 1))
+    # -- the route's demand ---------------------------------------------------------------
+    r_lateral, r_window, r_deadline, r_stop, pending, reroute, turn_m = "KEEP", (0.0, 0.0), 0.0, None, None, False, None
+    per_change = 2.5 * speed + 10.0
+    if route and route.get("matched"):
+        turn_m = route.get("at_m")
+        if route["manoeuvre"] == "ARRIVE":
+            r_lateral, r_stop = "PULL_OVER", "PULL_OVER_POINT"
+            r_window, r_deadline = (10.0, 50.0), 60.0
+            why.append(f"Route: arriving, destination on the {route.get('side', 'LEFT').lower()}.")
+        elif route.get("changes_needed"):
+            n, direction = route["changes_needed"], route["direction"]
+            needed = n * per_change + 15.0
+            if turn_m >= needed:
+                r_lateral = direction
+                r_window = (10.0, 10.0 + per_change)
+                r_deadline = turn_m - 15.0 - (n - 1) * per_change
+                if n > 1:
+                    pending = f"+{n - 1} {direction} before the junction"
+                why.append(f"Route: {route['manoeuvre'].lower()} in {turn_m:.0f} m needs {n} change(s) "
+                           f"{direction.lower()}; {turn_m:.0f} m is enough for that at {speed:.0f} m/s.")
+            else:
+                reroute = True
+                why.append(f"Route: {route['manoeuvre'].lower()} in {turn_m:.0f} m needs {n} change(s) "
+                           f"{direction.lower()}, which takes ~{needed:.0f} m at {speed:.0f} m/s. "
+                           f"Not safely possible: continue and ask the nav app to reroute.")
+        elif route["manoeuvre"] != "CONTINUE":
+            why.append(f"Route: {route['manoeuvre'].lower()} in {turn_m:.0f} m; already in a lane that "
+                       f"makes it, so hold the lane.")
+        else:
+            why.append("Route: continue on this road.")
+    elif route and not route.get("matched"):
+        why.append(f"Route: {route.get('reason', 'could not be matched to the map')}; follow the road.")
+
+    # -- the voice request ------------------------------------------------------------------
+    v_lateral, v_stop = "KEEP", None
+    if "pull" in text or "park" in text or ("stop" in text and "don't" not in text):
+        v_lateral, v_stop = "PULL_OVER", "PULL_OVER_POINT"
+    elif "left" in text:
+        v_lateral = "LEFT"
+    elif "right" in text:
+        v_lateral = "RIGHT"
+
+    # -- arbitration ------------------------------------------------------------------------
+    if v_lateral != "KEEP":
+        lateral, stop, source = v_lateral, v_stop, "VOICE"
+        window = (10.0, 40.0) if v_lateral == "PULL_OVER" else (12.0, 45.0)
+        deadline = 60.0 if v_lateral == "PULL_OVER" else 120.0
+        why.append({"PULL_OVER": "Voice: pull over - leave the carriageway on the near side and stop.",
+                    "LEFT": "Voice: take the lane to the left.",
+                    "RIGHT": "Voice: take the lane to the right."}[v_lateral])
+        if r_lateral != "KEEP" and r_lateral != v_lateral:
+            why.append("The voice request overrides the route for now; the route resumes after, "
+                       "and the nav app will reroute if the turn is missed.")
+            pending = f"route: {r_lateral} for the turn" if not reroute else pending
+    else:
+        lateral, stop, window, deadline = r_lateral, r_stop, r_window, r_deadline
+        source = "ROUTE" if r_lateral != "KEEP" or reroute else "NONE"
+        if not why:
+            why.append("No lane request: continue in the current lane.")
+
+    cruise = int(np.clip(preference + ("faster" in text) - ("slower" in text), -2, 1))
     why.append({-2: "Cruise well under the limit.", -1: "Cruise a notch under the limit.",
                 0: "Cruise at the limit.", 1: "Cruise a notch over the limit."}[cruise])
-
-    if lateral in ("LEFT", "RIGHT"):
-        window, deadline = (12.0, 45.0), 120.0
-        why.append(f"Complete the change between 12 m and 45 m ahead; {ctx.get('speed', 0):.0f} m/s "
-                   f"leaves room for Trion-Action to choose the gap.")
-    elif lateral == "PULL_OVER":
-        window, deadline = (10.0, 40.0), 60.0
-        why.append("Come to rest by about 40 m.")
-    else:
+    if lateral == "KEEP":
         window, deadline = (0.0, 0.0), 0.0
-    return ReasonMessage(command, lateral, window, deadline, cruise, stop, "STRAIGHT", " ".join(why))
+    return ReasonMessage(command, lateral, window, deadline, cruise, stop, "STRAIGHT", " ".join(why),
+                         source=source, pending=pending, reroute=reroute, route_turn_m=turn_m)
 
 
 # ------------------------------------------------------------------------------- Resolver
@@ -250,6 +300,8 @@ class Resolver:
                 run_start, run_end, _ = usable[0]
                 new_start = max(window[0], run_start)
                 new_end = min(run_end, new_start + needed)
+                if msg.deadline_m:
+                    new_end = min(new_end, msg.deadline_m)   # the route's turn is after this
                 shifted = abs(new_start - window[0]) > 1.0 or abs(new_end - window[1]) > 1.0
                 checks.append((f"same-direction lane on the {side}", True,
                                f"lane {neighbour[:8]}, continuous {run_start:.0f}-{run_end:.0f} m"))
@@ -357,3 +409,100 @@ def act(res: Resolved, speed: float) -> tuple[np.ndarray, dict]:
     summary = {"reach_m": float(x[-1]), "lateral_move_m": float(yv[-1] - y_cur[-1]),
                "final_speed": float(v[-1]), "commit_at_m": float(go) if res.lateral != "KEEP" else None}
     return np.column_stack([x, yv, heading]), summary
+
+
+# ------------------------------------------------------------------------ Route matcher
+# A nav app hands over a road-level route: "turn left in 180 m". The stack needs lane-level
+# goals. This turns one into the other from the HD map: which lanes lead into the requested
+# turn at the next junction, how many changes that is from the ego's lane, and how far away.
+
+TURN_DEG = 25.0                      # heading change through a connector that counts as a turn
+MANOEUVRES = ("CONTINUE", "TURN LEFT", "TURN RIGHT", "ARRIVE")
+
+
+def lane_group(resolver: Resolver, nmap, pose, own: str, lanes: set[str]) -> list[str]:
+    """Same-direction lanes across the road at the ego, ordered left to right."""
+    x, y, yaw = pose
+    left_unit = np.array([-np.sin(yaw), np.cos(yaw)])
+    found: dict[str, float] = {own: 0.0}
+    for offset in np.arange(-11.0, 11.5, 0.5):
+        gx, gy = np.array([x, y]) + offset * left_unit
+        cand = nmap.get_closest_lane(gx, gy, radius=2.0)
+        if not cand or cand in found or cand not in lanes:
+            continue
+        poses = resolver._lane_poses(nmap, cand)
+        if len(poses) == 0:
+            continue
+        near = poses[np.argmin(np.linalg.norm(poses[:, :2] - (gx, gy), axis=1))]
+        if abs(float(_wrap(near[2] - yaw))) < np.radians(45):
+            found[cand] = float(offset)
+    return [token for token, _ in sorted(found.items(), key=lambda kv: -kv[1])]  # left first
+
+
+def junction_options(resolver: Resolver, nmap, pose, token: str, lanes: set[str],
+                     horizon: float = 160.0) -> dict | None:
+    """Walk a lane forward to the first junction with a real turn; report what it offers."""
+    current, travelled = token, 0.0
+    for _ in range(8):
+        poses = resolver._lane_poses(nmap, current)
+        if len(poses) < 2:
+            return None
+        end_x = float(resolver._to_ego(poses[-1:, :2], pose)[0, 0])
+        outgoing = nmap.get_outgoing_lane_ids(current)
+        turns = {}
+        for out in outgoing:
+            q = resolver._lane_poses(nmap, out)
+            if len(q) < 2:
+                continue
+            change = float(np.degrees(_wrap(q[-1, 2] - q[0, 2])))
+            kind = "TURN LEFT" if change > TURN_DEG else "TURN RIGHT" if change < -TURN_DEG else "CONTINUE"
+            turns.setdefault(kind, out)
+        if any(k != "CONTINUE" for k in turns) and end_x <= horizon:
+            return {"at_m": end_x, "options": turns}
+        if end_x > horizon or not outgoing:
+            return {"at_m": end_x, "options": turns} if turns else None
+        # straightest continuation
+        current = min(outgoing, key=lambda o: abs(float(_wrap(
+            (resolver._lane_poses(nmap, o)[0, 2] if len(resolver._lane_poses(nmap, o)) else 0.0)
+            - poses[-1, 2]))))
+    return None
+
+
+def lane_route(resolver: Resolver, token: str, manoeuvre: str, arrive_side: str = "LEFT") -> dict:
+    """The LaneRoute step for one requested manoeuvre at the next junction."""
+    helper = resolver.helper
+    x, y, yaw_deg = helper.pose[token]
+    pose = (x, y, np.radians(yaw_deg))
+    nmap = helper.map(helper.location[token])
+    lanes = resolver._lane_tokens(nmap)
+    own = nmap.get_closest_lane(x, y, radius=2.0)
+    if not own or own not in lanes:
+        return {"matched": False, "reason": "ego not in a lane (junction)", "manoeuvre": manoeuvre}
+
+    group = lane_group(resolver, nmap, pose, own, lanes)
+    own_index = group.index(own)
+    per_lane = {t: junction_options(resolver, nmap, pose, t, lanes) for t in group}
+    step = {"manoeuvre": manoeuvre, "matched": True, "lanes": len(group), "current_lane": own_index,
+            "per_lane": {t[:8]: (o["options"] if o else {}) for t, o in per_lane.items()}}
+
+    if manoeuvre == "ARRIVE":
+        step.update(at_m=60.0, side=arrive_side, valid=[0 if arrive_side == "LEFT" else len(group) - 1])
+    elif manoeuvre == "CONTINUE":
+        step.update(at_m=None, valid=list(range(len(group))))
+    else:
+        junctions = [(o["at_m"], t) for t, o in per_lane.items() if o and manoeuvre in o["options"]]
+        if not junctions:
+            nearest = min((o["at_m"] for o in per_lane.values() if o), default=None)
+            step.update(matched=False, at_m=nearest,
+                        reason=f"no {manoeuvre.lower()} from this road within {160:.0f} m")
+            return step
+        at_m = min(a for a, _ in junctions)
+        valid = [group.index(t) for a, t in junctions if abs(a - at_m) < 15.0]
+        step.update(at_m=at_m, valid=sorted(valid))
+    valid = step.get("valid", [])
+    if valid:
+        nearest_valid = min(valid, key=lambda i: abs(i - own_index))
+        step["changes_needed"] = abs(nearest_valid - own_index)
+        step["direction"] = ("LEFT" if nearest_valid < own_index else
+                             "RIGHT" if nearest_valid > own_index else None)
+    return step

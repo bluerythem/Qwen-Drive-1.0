@@ -364,6 +364,40 @@ What the four canned commands show on `nuscenes 147` (ego 11.9 m/s, kerb lane of
 | pull over | kerb boundary 2.2 m left; stop at 28 m (2.5 m/s^2 from 11.9 m/s) | drives PULL_OVER, +1.3 m, rests at 0 m/s |
 | keep going | localized, nothing else to check | KEEP, accelerates to the 50 km/h cap |
 
+### Navigation input: the Route matcher
+
+A nav app hands over a *road-level* route ("turn right in 180 m"); the stack needs
+*lane-level* goals. `lane_route()` in `tools/trion.py` bridges them from the HD map: it finds
+the same-direction lanes across the road at the ego (`lane_group`), walks each forward to the
+first junction with a real turn - a `lane_connector` whose heading changes by more than 25
+degrees - and reports which lanes make the requested turn, how many changes that is from the
+ego's lane, and how far away it is. That is the `LaneRoute` message Trion-Reason reads.
+
+Trion-Reason then does the two things a symbolic reasoner is for. It judges **feasibility**:
+N changes need about N x (2.5 s of travel + 10 m) + 15 m; if the junction is closer than that,
+the answer is "continue and ask the nav app to reroute", never "force the gap". And it
+**arbitrates** route against voice: the route is the default, a voice request is a scoped
+override that wins until done, and the message carries `source: ROUTE | VOICE` plus a
+`pending` follow-up ("+1 RIGHT before the junction") so a two-change sequence is explicit.
+
+Four scenes, chosen by running the matcher over every moving on-lane scene in mini:
+
+| scene | route: turn right at the next junction | what it shows |
+| --- | --- | --- |
+| nuscenes 147 | at 13 m, needs 2 changes | out of reach -> KEEP, **reroute requested** |
+| nuscenes 132 | at 103 m, needs 1 change | the canonical route-driven change; the right side is a junction until 60 m, so the resolver fits the window to 64-88 m |
+| nuscenes 189 | at 127 m, needs 2 changes | a **sequence**: RIGHT now with `pending +1 RIGHT`, deadline 71 m |
+| nuscenes 203 | at 33 m at 15 m/s, needs 2 | not possible -> reroute |
+
+"turn left" on 147 shows the other branch: already in a valid lane, hold it. "arrive:
+destination on the left" resolves to a PULL_OVER from source ROUTE - the same manoeuvre the
+voice command produces. And voice "pull over" on 132 with the route wanting RIGHT shows the
+override: PULL_OVER from VOICE, with `pending route: RIGHT for the turn`.
+
+nuscenes 128 was the first pick for the single-change case and the resolver rejected it: its
+right side is junction connectors for 60 of the first 90 m, with a real lane only at 24-32 m.
+That is the map being right, and 132 replaced it.
+
 Every line on the figure carries a provenance tag, and a key sits in the footer:
 
 | tag | meaning | examples |
