@@ -11,7 +11,7 @@ Qwen-Drive-1.0-4B/
 
 # nuScenes mini and everything derived from it (CC BY-NC-SA; rebuild with tools/)
 data/nuscenes/
-data/nuscenes-trainval/
+data/nuscenes-trainval
 data/nuscenes_perception/
 data/nuscenes_scenes.jsonl
 

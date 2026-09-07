@@ -2,6 +2,20 @@
 
 Set up on 2026-09-05, RTX PRO 6000 Blackwell (sm_120, 96 GB), Ubuntu 24.04, driver 595.84.
 
+## On another machine
+
+    git clone git@github.com:bluerythem/Qwen-Drive-1.0.git -b interactive-demo qwen-drive
+    cd qwen-drive
+    ./bootstrap.sh --nuscenes /path/to/v1.0-mini.tar     # or without, for the demo scenes only
+    source env.sh && python app.py                         # http://127.0.0.1:7860
+
+`bootstrap.sh` rebuilds everything that is deliberately not in git: the venv, torch and the
+prebuilt kernels, the 13 GB of weights, the private CUDA toolchain, and (given the mini tar,
+which needs a nuScenes account) the nuScenes data, the map expansion and every derived file.
+It is idempotent and needs no sudo. Requirements: Linux x86_64, an NVIDIA driver, curl, tar,
+unzip, git. Python 3.12 is fetched by uv if absent. `env.sh` picks the GPU architecture up
+from `nvidia-smi`, so the JIT kernels build for whatever card is present.
+
 ## What's here
 
 | Path | What |
