@@ -1,3 +1,27 @@
+> ## This fork: interactive demo, nuScenes tooling, and the Trion two-system design
+>
+> Branch `interactive-demo` of [bluerythem/Qwen-Drive-1.0](https://github.com/bluerythem/Qwen-Drive-1.0/tree/interactive-demo).
+> Everything below this box is the upstream Qwen-Drive README, unchanged.
+>
+> **Set up on any Linux x86_64 machine with an NVIDIA GPU** (no sudo; ~20 min, mostly the 13 GB download):
+> ```bash
+> git clone git@github.com:bluerythem/Qwen-Drive-1.0.git -b interactive-demo qwen-drive
+> cd qwen-drive && ./bootstrap.sh --nuscenes /path/to/v1.0-mini.tar   # omit the flag for demo scenes only
+> source env.sh && python app.py                                        # http://127.0.0.1:7860
+> ```
+>
+> | what | where |
+> | --- | --- |
+> | **Setup notes** - every deviation from upstream, every measurement, every dead end | [`SETUP_NOTES.md`](SETUP_NOTES.md) |
+> | **Design proposal** - two systems, messages, use cases (for stakeholders) | [PDF](design/Trion_Two-System_Design_Proposal.pdf) · [DOCX](design/Trion_Two-System_Design_Proposal.docx) · [generator](design/build_design_doc.py) |
+> | **Interactive app** - Trion mock, planning, VQA, perception tabs | [`app.py`](app.py) |
+> | **Trion mock** - Route Matcher, Trion-Reason, Resolver, Trion-Action | [`tools/trion.py`](tools/trion.py) |
+> | **nuScenes tooling** - scenes, perception frames, map GT, lane-change and multi-lane scans | [`tools/`](tools/) |
+> | **Rebuild everything not in git** - venv, weights, CUDA toolchain, nuScenes data | [`bootstrap.sh`](bootstrap.sh) |
+>
+> Not in git and rebuilt by `bootstrap.sh`: the weights (Hugging Face), the venv, the CUDA toolchain, and the nuScenes
+> data. `v1.0-mini.tar` needs a free nuScenes account and is supplied by hand.
+
 
 <img src="assets/logo.png" alt="Qwen-Drive" width="420">
 </p>
